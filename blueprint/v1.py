@@ -6,7 +6,7 @@ import service.greeting as greeting_service
 bp = func.Blueprint()
 
 @bp.function_name("greeting")
-@bp.route(route='greeting',methods=['GET, POST'])
+@bp.route(route='v1/greeting',methods=['GET','POST'])
 def f1(req: func.HttpRequest):
     logging.info("Python HTTP trigger function processed a request.")
     name = req.params.get("name")
