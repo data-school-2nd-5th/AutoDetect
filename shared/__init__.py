@@ -8,6 +8,12 @@ from .helper import (
     json_string,
     latest_modification_date,
     node_text,
+    parse_alternative_terms,
+    parse_args,
+    parse_demonstrative_examples,
+    parse_mapping_notes,
+    parse_observed_examples,
+    parse_potential_mitigations,
     to_bool,
     utc_now,
 )
