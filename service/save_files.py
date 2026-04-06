@@ -62,10 +62,12 @@ def parse_upload_mapping(raw_mapping: str) -> tuple[Path, str]:
     return local_file, blob_path
 
 
-def upload_by_targz_body(
-    body: bytes, upload_blob: UploadBlob, base_blob_path: str = ""
-) -> list[str]:
-    normalized_base_path = base_blob_path.strip().strip("/")
+def upload_by_targz_body(machine_id: str, workspace_id: str, path: str, body: bytes):
+    base_blob_path = posix_join(
+        machine_id.strip().strip("/"),
+        workspace_id.strip().strip("/"),
+        path.strip().strip("/"),
+    )
     uploaded_blob_paths: list[str] = []
 
     with tarfile.open(fileobj=BytesIO(body), mode="r:gz") as archive:
@@ -81,14 +83,8 @@ def upload_by_targz_body(
             if not member_path:
                 continue
 
-            if normalized_base_path:
-                blob_path = posix_join(normalized_base_path, member_path)
-            else:
-                blob_path = member_path
-
-            uploaded_blob_path = upload_blob.save_bytes(
-                extracted_file.read(), blob_path
-            )
+            blob_path = posix_join(base_blob_path, member_path)
+            uploaded_blob_path = uploader.save_bytes(extracted_file.read(), blob_path)
             uploaded_blob_paths.append(uploaded_blob_path)
 
     return uploaded_blob_paths
