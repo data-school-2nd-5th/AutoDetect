@@ -1,11 +1,11 @@
 import argparse
-import os
 import tarfile
 import logging
 from io import BytesIO
 from pathlib import Path
 from posixpath import join as posix_join
 from shared.upload_blob import UploadBlob
+from shared.get_env import get_env
 
 
 def _parse_args() -> argparse.Namespace:
@@ -14,7 +14,6 @@ def _parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--connection-string",
-        default=os.getenv("AZURE_STORAGE_CONNECTION_STRING"),
         help="Azure Storage connection string. Defaults to AZURE_STORAGE_CONNECTION_STRING.",
     )
     parser.add_argument(
@@ -36,14 +35,17 @@ def _parse_args() -> argparse.Namespace:
     args = parser.parse_args()
 
     if not args.connection_string:
-        parser.error("A connection string is required via --connection-string or AZURE_STORAGE_CONNECTION_STRING.")
+        parser.error(
+            "A connection string is required via --connection-string or AZURE_STORAGE_CONNECTION_STRING."
+        )
 
     return args
 
-CONNECTION_STRING = os.getenv('UPLOAD_CONNECTION_STRING')
-CONTAINER_NAME=os.getenv('UPLOAD_CONTAINER_NAME')
 
-uploader = UploadBlob(CONNECTION_STRING,CONTAINER_NAME)
+CONNECTION_STRING = get_env("UPLOAD_CONNECTION_STRING")
+CONTAINER_NAME = get_env("UPLOAD_CONTAINER_NAME")
+
+uploader = UploadBlob(CONNECTION_STRING, CONTAINER_NAME)
 if not uploader.is_connected():
     logging.error("Uploader is not connected")
 
@@ -60,7 +62,9 @@ def parse_upload_mapping(raw_mapping: str) -> tuple[Path, str]:
     return local_file, blob_path
 
 
-def upload_by_targz_body(body: bytes, upload_blob: UploadBlob, base_blob_path: str = "") -> list[str]:
+def upload_by_targz_body(
+    body: bytes, upload_blob: UploadBlob, base_blob_path: str = ""
+) -> list[str]:
     normalized_base_path = base_blob_path.strip().strip("/")
     uploaded_blob_paths: list[str] = []
 
@@ -82,7 +86,9 @@ def upload_by_targz_body(body: bytes, upload_blob: UploadBlob, base_blob_path: s
             else:
                 blob_path = member_path
 
-            uploaded_blob_path = upload_blob.save_bytes(extracted_file.read(), blob_path)
+            uploaded_blob_path = upload_blob.save_bytes(
+                extracted_file.read(), blob_path
+            )
             uploaded_blob_paths.append(uploaded_blob_path)
 
     return uploaded_blob_paths
