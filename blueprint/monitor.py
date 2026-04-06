@@ -3,7 +3,7 @@ import json
 import logging
 
 from service import upload_by_targz_body
-from shared import is_targz_payload
+from shared import is_targz_payload, sanitize
 
 bp = func.Blueprint()
 
@@ -13,37 +13,20 @@ bp = func.Blueprint()
 def upload(req: func.HttpRequest):
     logging.info("Python HTTP trigger function processed an upload request.")
 
-    machine_id = req.headers.get("Machine-Id")
-    workspace_id = req.headers.get("Workspace-Id")
-    path = req.headers.get("Path")
+    try:
+        machine_id = sanitize(req.headers.get("Machine-Id"), str)
+        workspace_id = sanitize(req.headers.get("Workspace-Id"))
+        path = sanitize(req.headers.get("Path"))
+    except TypeError:
+        logging.error("Headers failed")
+        return func.HttpResponse("Header Error", status_code=400)
 
     logging.info(
         f"Processing upload: machine_id={machine_id}, workspace_id={workspace_id}"
     )
 
-    if not machine_id or not isinstance(machine_id, str):
-        logging.warning("Upload failed: Missing or invalid Machine-Id")
-        return func.HttpResponse(
-            "Machine id must be provided in headers", status_code=400
-        )
-
-    if not workspace_id or not isinstance(workspace_id, str):
-        logging.warning(
-            f"Upload failed: Missing or invalid Workspace-Id (Machine: {machine_id})"
-        )
-        return func.HttpResponse(
-            "Workspace id must be provided in headers", status_code=400
-        )
-
-    if not path or not isinstance(path, str):
-        logging.warning(
-            f"Upload failed: Missing or invalid Path (Machine: {machine_id})"
-        )
-        return func.HttpResponse("Path must be provided in headers", status_code=400)
-
     try:
         body = req.get_body()
-        logging.info(f"Received payload size: {len(body)} bytes")
 
         if not is_targz_payload(body):
             logging.error(
@@ -52,6 +35,7 @@ def upload(req: func.HttpRequest):
             return func.HttpResponse(
                 "Request body must be a valid .tar.gz binary payload", status_code=400
             )
+        logging.info(f"Received payload size: {len(body)} bytes")
         uploaded_list = upload_by_targz_body(machine_id, workspace_id, path, body)
         return func.HttpResponse(
             json.dumps(uploaded_list),
