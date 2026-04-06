@@ -1,4 +1,3 @@
-import argparse
 import logging
 import tarfile
 from io import BytesIO
@@ -12,20 +11,10 @@ CONNECTION_STRING = get_env("UPLOAD_CONNECTION_STRING")
 CONTAINER_NAME = get_env("UPLOAD_CONTAINER_NAME")
 
 uploader = UploadBlob(CONNECTION_STRING, CONTAINER_NAME)
+
 if not uploader.is_connected():
     logging.error("Uploader is not connected")
-
-
-def parse_upload_mapping(raw_mapping: str) -> tuple[Path, str]:
-    if "=" not in raw_mapping:
-        raise ValueError(
-            f"Invalid upload mapping '{raw_mapping}'. Use the format LOCAL_FILE=BLOB_PATH.",
-        )
-
-    local_file_raw, blob_path_raw = raw_mapping.split("=", 1)
-    local_file = Path(local_file_raw).expanduser()
-    blob_path = blob_path_raw.strip()
-    return local_file, blob_path
+    raise ConnectionError()
 
 
 def upload_by_targz_body(machine_id: str, workspace_id: str, path: str, body: bytes):
@@ -54,25 +43,3 @@ def upload_by_targz_body(machine_id: str, workspace_id: str, path: str, body: by
             uploaded_blob_paths.append(uploaded_blob_path)
 
     return uploaded_blob_paths
-
-
-def main() -> int:
-    args = parse_args()
-    upload_blob = UploadBlob(
-        connection_string=args.connection_string,
-        container_name=args.container,
-    )
-
-    if args.create_container:
-        upload_blob.ensure_container()
-
-    for raw_mapping in args.uploads:
-        local_file, blob_path = parse_upload_mapping(raw_mapping)
-        uploaded_blob_path = upload_blob.save_file(local_file, blob_path)
-        print(f"Uploaded {local_file} -> {args.container}/{uploaded_blob_path}")
-
-    return 0
-
-
-if __name__ == "__main__":
-    raise SystemExit(main())
