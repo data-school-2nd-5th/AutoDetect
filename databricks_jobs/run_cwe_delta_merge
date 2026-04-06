@@ -1,0 +1,24 @@
+# Databricks notebook source
+import sys
+
+
+def ensure_widget(name: str, default: str = "") -> None:
+    try:
+        dbutils.widgets.get(name)
+    except Exception:
+        dbutils.widgets.text(name, default)
+
+
+ensure_widget("source_xml_path", "")
+ensure_widget("source_version_id", "")
+ensure_widget("target_table", "3dt2ndteam5.cwe.cwe_weaknesses")
+
+nb_path = dbutils.notebook.entry_point.getDbutils().notebook().getContext().notebookPath().get()
+repo_root = "/Workspace" + nb_path.split("/databricks_jobs/")[0]
+
+if repo_root not in sys.path:
+    sys.path.insert(0, repo_root)
+
+from databricks_jobs.cwe_delta_merge_job import main
+
+main()
