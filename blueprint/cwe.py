@@ -4,7 +4,7 @@ import os
 
 import azure.functions as func
 
-from service.cwe_runtime import build_orchestrator
+from service import build_orchestrator
 
 
 bp = func.Blueprint()

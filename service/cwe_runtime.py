@@ -10,7 +10,7 @@ import requests
 from azure.core.exceptions import ResourceNotFoundError
 from azure.storage.blob import BlobServiceClient
 
-from .cwe_orchestrator import CweSyncOrchestrator
+from service import CweSyncOrchestrator
 
 
 @dataclass(frozen=True)

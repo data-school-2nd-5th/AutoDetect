@@ -1,6 +1,6 @@
 import azure.functions as func
 import logging
-import service.greeting as greeting_service
+import service as greeting_service
 
 
 bp = func.Blueprint()
