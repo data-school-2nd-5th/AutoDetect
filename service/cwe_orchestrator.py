@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from typing import Any, Dict
+from urllib.parse import urlsplit, urlunsplit
 
 from shared import extract_xml_payload, utc_now
 
@@ -47,7 +48,14 @@ class CweSyncOrchestrator:
         return {
             "status": "completed",
             "version_id": version_id,
-            "source_xml_path": source_xml_path,
+            "source_xml_path": _mask_sensitive_uri(source_xml_path),
             "run_id": run_result.get("run_id"),
             "trigger": trigger,
         }
+
+
+def _mask_sensitive_uri(uri: str) -> str:
+    if not uri.startswith(("http://", "https://")):
+        return uri
+    parts = urlsplit(uri)
+    return urlunsplit((parts.scheme, parts.netloc, parts.path, "", ""))

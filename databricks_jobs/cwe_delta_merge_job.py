@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 import os
+from urllib.request import urlopen
 
 from pyspark.sql import SparkSession
 from pyspark.sql.types import StringType, StructField, StructType
@@ -19,6 +20,10 @@ def _get_param(name: str, default: str = "") -> str:
 
 
 def _read_xml_text(spark: SparkSession, source_xml_path: str) -> str:
+    if source_xml_path.startswith(("http://", "https://")):
+        with urlopen(source_xml_path, timeout=30) as response:
+            return response.read().decode("utf-8")
+
     payload = spark.read.format("binaryFile").load(source_xml_path).select("content").first()
     if payload is None:
         raise ValueError(f"XML payload not found at {source_xml_path}")

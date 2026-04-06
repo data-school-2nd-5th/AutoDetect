@@ -3,12 +3,13 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+from datetime import datetime, timedelta, timezone
 from dataclasses import dataclass
 from typing import Any, Dict
 
 import requests
 from azure.core.exceptions import ResourceNotFoundError
-from azure.storage.blob import BlobServiceClient
+from azure.storage.blob import BlobSasPermissions, BlobServiceClient, generate_blob_sas
 
 from service import CweSyncOrchestrator
 from shared import get_required_env
@@ -23,10 +24,31 @@ class PipelineSettings:
     blob_output_prefix: str
     state_blob_path: str
     blob_uri_prefix: str
+    databricks_source_uri_mode: str
+    blob_sas_expiry_seconds: int
     databricks_host: str
     databricks_token: str
     databricks_job_id: int
     databricks_target_table: str
+
+
+def _normalize_env(value: str | None, default: str) -> str:
+    if value is None:
+        return default
+    normalized = value.strip()
+    if not normalized or normalized.lower() in {"none", "null"}:
+        return default
+    return normalized
+
+
+def _parse_connection_string(connection_string: str) -> Dict[str, str]:
+    result: Dict[str, str] = {}
+    for item in connection_string.split(";"):
+        if "=" not in item:
+            continue
+        key, value = item.split("=", 1)
+        result[key.strip()] = value.strip()
+    return result
 
 
 def load_settings() -> PipelineSettings:
@@ -40,10 +62,18 @@ def load_settings() -> PipelineSettings:
         source_url=source_url,
         request_timeout_seconds=request_timeout_seconds,
         storage_connection_string=get_required_env("AZURE_STORAGE_CONNECTION_STRING"),
-        blob_container=os.getenv("CWE_BLOB_CONTAINER", "cwe-data"),
-        blob_output_prefix=os.getenv("CWE_BLOB_OUTPUT_PREFIX", "cwe/raw"),
-        state_blob_path=os.getenv("CWE_STATE_BLOB_PATH", "cwe/state/version_state.json"),
-        blob_uri_prefix=os.getenv("CWE_BLOB_URI_PREFIX", ""),
+        blob_container=_normalize_env(os.getenv("CWE_BLOB_CONTAINER"), "cwe-data"),
+        blob_output_prefix=_normalize_env(os.getenv("CWE_BLOB_OUTPUT_PREFIX"), "cwe/raw"),
+        state_blob_path=_normalize_env(
+            os.getenv("CWE_STATE_BLOB_PATH"),
+            "cwe/state/version_state.json",
+        ),
+        blob_uri_prefix=_normalize_env(os.getenv("CWE_BLOB_URI_PREFIX"), ""),
+        databricks_source_uri_mode=_normalize_env(
+            os.getenv("DATABRICKS_SOURCE_URI_MODE"),
+            "sas_url",
+        ).lower(),
+        blob_sas_expiry_seconds=int(_normalize_env(os.getenv("CWE_BLOB_SAS_EXPIRY_SECONDS"), "3600")),
         databricks_host=get_required_env("DATABRICKS_HOST"),
         databricks_token=get_required_env("DATABRICKS_TOKEN"),
         databricks_job_id=int(get_required_env("DATABRICKS_JOB_ID")),
@@ -84,11 +114,19 @@ class XmlBlobStore:
         container_name: str,
         output_prefix: str,
         blob_uri_prefix: str = "",
+        databricks_source_uri_mode: str = "sas_url",
+        blob_sas_expiry_seconds: int = 3600,
     ) -> None:
         self._blob_service_client = BlobServiceClient.from_connection_string(connection_string)
         self._container_name = container_name
         self._output_prefix = output_prefix.rstrip("/")
         self._blob_uri_prefix = blob_uri_prefix.rstrip("/")
+        self._databricks_source_uri_mode = databricks_source_uri_mode
+        self._blob_sas_expiry_seconds = blob_sas_expiry_seconds
+
+        conn_map = _parse_connection_string(connection_string)
+        self._account_name = conn_map.get("AccountName", "")
+        self._account_key = conn_map.get("AccountKey", "")
 
     def save_xml(self, version_id: str, xml_bytes: bytes) -> str:
         blob_name = f"{self._output_prefix}/{version_id}/cwec_latest.xml"
@@ -97,6 +135,23 @@ class XmlBlobStore:
             blob=blob_name,
         )
         blob_client.upload_blob(xml_bytes, overwrite=True)
+
+        if self._databricks_source_uri_mode == "sas_url":
+            if not self._account_name or not self._account_key:
+                raise ValueError(
+                    "AccountName/AccountKey are required in AZURE_STORAGE_CONNECTION_STRING "
+                    "when DATABRICKS_SOURCE_URI_MODE=sas_url",
+                )
+            token = generate_blob_sas(
+                account_name=self._account_name,
+                account_key=self._account_key,
+                container_name=self._container_name,
+                blob_name=blob_name,
+                permission=BlobSasPermissions(read=True),
+                start=datetime.now(timezone.utc) - timedelta(minutes=5),
+                expiry=datetime.now(timezone.utc) + timedelta(seconds=self._blob_sas_expiry_seconds),
+            )
+            return f"{blob_client.url}?{token}"
 
         if self._blob_uri_prefix:
             return f"{self._blob_uri_prefix}/{blob_name}"
@@ -187,6 +242,8 @@ def build_orchestrator() -> CweSyncOrchestrator:
         container_name=settings.blob_container,
         output_prefix=settings.blob_output_prefix,
         blob_uri_prefix=settings.blob_uri_prefix,
+        databricks_source_uri_mode=settings.databricks_source_uri_mode,
+        blob_sas_expiry_seconds=settings.blob_sas_expiry_seconds,
     )
     state_store = StateStore(
         connection_string=settings.storage_connection_string,
