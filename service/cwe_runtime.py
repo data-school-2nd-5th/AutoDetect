@@ -164,7 +164,7 @@ class DatabricksClient:
         url = f"{self._host}/api/2.1/jobs/run-now"
         payload = {
             "job_id": self._job_id,
-            "notebook_params": {
+            "job_parameters": {
                 "source_xml_path": source_xml_path,
                 "source_version_id": source_version_id,
                 "target_table": self._target_table,
