@@ -5,7 +5,7 @@ import logging
 from io import BytesIO
 from pathlib import Path
 from posixpath import join as posix_join
-from pylib.upload_blob import UploadBlob
+from shared.upload_blob import UploadBlob
 
 
 def _parse_args() -> argparse.Namespace:
