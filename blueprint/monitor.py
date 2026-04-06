@@ -1,26 +1,11 @@
 import azure.functions as func
-import logging
-import tarfile
 import json
-from io import BytesIO
+import logging
+
 from service import upload_by_targz_body
+from shared import is_targz_payload
 
 bp = func.Blueprint()
-
-
-def _is_targz_payload(body: bytes) -> bool:
-    if not body or len(body) < 2:
-        return False
-
-    # Gzip files start with the 0x1f8b magic number.
-    if body[:2] != b"\x1f\x8b":
-        return False
-
-    try:
-        with tarfile.open(fileobj=BytesIO(body), mode="r:gz"):
-            return True
-    except (tarfile.TarError, OSError, EOFError):
-        return False
 
 
 @bp.function_name("upload")
@@ -60,7 +45,7 @@ def upload(req: func.HttpRequest):
         body = req.get_body()
         logging.info(f"Received payload size: {len(body)} bytes")
 
-        if not _is_targz_payload(body):
+        if not is_targz_payload(body):
             logging.error(
                 f"Invalid payload format: Not a .tar.gz (Machine: {machine_id}, Path: {path})"
             )
@@ -74,8 +59,6 @@ def upload(req: func.HttpRequest):
             mimetype="application/json",
         )
 
-    except Exception as e:
-        logging.exception(
-            "Error reading request body"
-        )  # exception은 트레이스백을 함께 기록합니다.
+    except Exception:
+        logging.exception("Error reading request body")
         return func.HttpResponse("Error processing request body", status_code=500)

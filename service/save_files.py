@@ -1,44 +1,11 @@
 import argparse
-import tarfile
 import logging
+import tarfile
 from io import BytesIO
 from pathlib import Path
 from posixpath import join as posix_join
-from shared import UploadBlob, get_env
 
-
-def _parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(
-        description="Save one or more local files to Azure Blob Storage.",
-    )
-    parser.add_argument(
-        "--connection-string",
-        help="Azure Storage connection string. Defaults to AZURE_STORAGE_CONNECTION_STRING.",
-    )
-    parser.add_argument(
-        "--container",
-        required=True,
-        help="Target blob container name.",
-    )
-    parser.add_argument(
-        "--create-container",
-        action="store_true",
-        help="Create the container if it does not already exist.",
-    )
-    parser.add_argument(
-        "uploads",
-        nargs="+",
-        metavar="LOCAL_FILE=BLOB_PATH",
-        help="Upload mapping. Example: data/report.csv=archive/2026-04-06/report.csv",
-    )
-    args = parser.parse_args()
-
-    if not args.connection_string:
-        parser.error(
-            "A connection string is required via --connection-string or AZURE_STORAGE_CONNECTION_STRING."
-        )
-
-    return args
+from shared import UploadBlob, get_env, parse_args
 
 
 CONNECTION_STRING = get_env("UPLOAD_CONNECTION_STRING")
@@ -90,7 +57,7 @@ def upload_by_targz_body(machine_id: str, workspace_id: str, path: str, body: by
 
 
 def main() -> int:
-    args = _parse_args()
+    args = parse_args()
     upload_blob = UploadBlob(
         connection_string=args.connection_string,
         container_name=args.container,

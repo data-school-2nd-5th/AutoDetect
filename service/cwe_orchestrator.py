@@ -1,9 +1,8 @@
 from __future__ import annotations
 
-import io
-from datetime import datetime, timezone
 from typing import Any, Dict
-import zipfile
+
+from shared import extract_xml_payload, utc_now
 
 
 class CweSyncOrchestrator:
@@ -28,7 +27,7 @@ class CweSyncOrchestrator:
             }
 
         zip_payload = self._source_client.download_latest_zip()
-        xml_bytes = _extract_xml_payload(zip_payload)
+        xml_bytes = extract_xml_payload(zip_payload)
 
         source_xml_path = self._blob_store.save_xml(version_id, xml_bytes)
         run_result = self._databricks_client.run_job(
@@ -39,7 +38,7 @@ class CweSyncOrchestrator:
         new_state = {
             "version_id": version_id,
             "last_modified": metadata.get("last_modified", ""),
-            "processed_at_utc": _utc_now(),
+            "processed_at_utc": utc_now(),
             "trigger": trigger,
             "run_id": run_result.get("run_id"),
         }
@@ -52,19 +51,3 @@ class CweSyncOrchestrator:
             "run_id": run_result.get("run_id"),
             "trigger": trigger,
         }
-
-
-def _extract_xml_payload(zip_payload: bytes) -> bytes:
-    with zipfile.ZipFile(io.BytesIO(zip_payload), mode="r") as archive:
-        xml_names = [name for name in archive.namelist() if name.lower().endswith(".xml")]
-        if not xml_names:
-            raise ValueError("Zip payload does not contain an XML file")
-
-        if "cwec_latest.xml" in xml_names:
-            return archive.read("cwec_latest.xml")
-
-        return archive.read(xml_names[0])
-
-
-def _utc_now() -> str:
-    return datetime.now(timezone.utc).isoformat()

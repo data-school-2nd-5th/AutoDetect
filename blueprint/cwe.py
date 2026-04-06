@@ -5,13 +5,10 @@ import os
 import azure.functions as func
 
 from service import build_orchestrator
+from shared import to_bool
 
 
 bp = func.Blueprint()
-
-
-def _to_bool(raw_value: str | None) -> bool:
-    return (raw_value or "").strip().lower() in {"1", "true", "t", "yes", "y"}
 
 
 @bp.function_name("cwe_sync_timer")
@@ -24,7 +21,7 @@ def _to_bool(raw_value: str | None) -> bool:
 def cwe_sync_timer(mytimer: func.TimerRequest) -> None:
     del mytimer
 
-    force = _to_bool(os.getenv("CWE_FORCE_SYNC"))
+    force = to_bool(os.getenv("CWE_FORCE_SYNC"))
     orchestrator = build_orchestrator()
     result = orchestrator.run(force=force, trigger="timer")
     logging.info("CWE timer sync finished: %s", result)
@@ -33,14 +30,14 @@ def cwe_sync_timer(mytimer: func.TimerRequest) -> None:
 @bp.function_name("cwe_sync_manual")
 @bp.route(route="cwe-sync", methods=["POST"], auth_level=func.AuthLevel.FUNCTION)
 def cwe_sync_manual(req: func.HttpRequest) -> func.HttpResponse:
-    force = _to_bool(req.params.get("force"))
+    force = to_bool(req.params.get("force"))
 
     if not force:
         try:
             body = req.get_json()
         except ValueError:
             body = {}
-        force = _to_bool(body.get("force")) if isinstance(body, dict) else False
+        force = to_bool(body.get("force")) if isinstance(body, dict) else False
 
     try:
         orchestrator = build_orchestrator()

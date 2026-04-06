@@ -11,6 +11,7 @@ from azure.core.exceptions import ResourceNotFoundError
 from azure.storage.blob import BlobServiceClient
 
 from service import CweSyncOrchestrator
+from shared import get_required_env
 
 
 @dataclass(frozen=True)
@@ -28,13 +29,6 @@ class PipelineSettings:
     databricks_target_table: str
 
 
-def _get_required_env(name: str) -> str:
-    value = os.getenv(name)
-    if not value:
-        raise ValueError(f"Missing required environment variable: {name}")
-    return value
-
-
 def load_settings() -> PipelineSettings:
     source_url = os.getenv(
         "CWE_SOURCE_URL",
@@ -45,14 +39,14 @@ def load_settings() -> PipelineSettings:
     return PipelineSettings(
         source_url=source_url,
         request_timeout_seconds=request_timeout_seconds,
-        storage_connection_string=_get_required_env("AZURE_STORAGE_CONNECTION_STRING"),
+        storage_connection_string=get_required_env("AZURE_STORAGE_CONNECTION_STRING"),
         blob_container=os.getenv("CWE_BLOB_CONTAINER", "cwe-data"),
         blob_output_prefix=os.getenv("CWE_BLOB_OUTPUT_PREFIX", "cwe/raw"),
         state_blob_path=os.getenv("CWE_STATE_BLOB_PATH", "cwe/state/version_state.json"),
         blob_uri_prefix=os.getenv("CWE_BLOB_URI_PREFIX", ""),
-        databricks_host=_get_required_env("DATABRICKS_HOST"),
-        databricks_token=_get_required_env("DATABRICKS_TOKEN"),
-        databricks_job_id=int(_get_required_env("DATABRICKS_JOB_ID")),
+        databricks_host=get_required_env("DATABRICKS_HOST"),
+        databricks_token=get_required_env("DATABRICKS_TOKEN"),
+        databricks_job_id=int(get_required_env("DATABRICKS_JOB_ID")),
         databricks_target_table=os.getenv("DELTA_TARGET_TABLE", "main.security.cwe_weaknesses"),
     )
 
