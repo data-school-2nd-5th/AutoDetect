@@ -1,17 +1,49 @@
 # Databricks notebook source
+import os
 import sys
 
 
-def ensure_widget(name: str, default: str = "") -> None:
+def current_bindings() -> dict[str, str]:
     try:
-        dbutils.widgets.get(name)
+        raw = dbutils.notebook.entry_point.getCurrentBindings()
     except Exception:
-        dbutils.widgets.text(name, default)
+        return {}
+
+    try:
+        return {str(k): str(v) for k, v in raw.items()}
+    except Exception:
+        try:
+            return {str(item.getKey()): str(item.getValue()) for item in raw.entrySet()}
+        except Exception:
+            return {}
 
 
-ensure_widget("source_xml_path", "")
-ensure_widget("source_version_id", "")
-ensure_widget("target_table", "3dt2ndteam5.cwe.cwe_weaknesses")
+def resolve_param(name: str, default: str = "") -> str:
+    bindings = current_bindings()
+    if name in bindings and bindings[name]:
+        return bindings[name]
+
+    try:
+        value = dbutils.widgets.getArgument(name, default)
+        if value:
+            return value
+    except Exception:
+        pass
+
+    return default
+
+
+source_xml_path = resolve_param("source_xml_path", "")
+source_version_id = resolve_param("source_version_id", "")
+target_table = resolve_param("target_table", "3dt2ndteam5.cwe.cwe_weaknesses")
+
+dbutils.widgets.text("source_xml_path", source_xml_path)
+dbutils.widgets.text("source_version_id", source_version_id)
+dbutils.widgets.text("target_table", target_table)
+
+os.environ["SOURCE_XML_PATH"] = dbutils.widgets.get("source_xml_path")
+os.environ["SOURCE_VERSION_ID"] = dbutils.widgets.get("source_version_id")
+os.environ["TARGET_TABLE"] = dbutils.widgets.get("target_table")
 
 nb_path = dbutils.notebook.entry_point.getDbutils().notebook().getContext().notebookPath().get()
 repo_root = "/Workspace" + nb_path.split("/databricks_jobs/")[0]
