@@ -1,10 +1,11 @@
+from __future__ import annotations
 """Service package.
 
 Keep exports lazy so Databricks-side imports (e.g. ``service.cwe_parser``)
 do not eagerly import Azure SDK dependent modules.
 """
-
-from __future__ import annotations
+from .cwe_orchestrator import CweSyncOrchestrator
+from .save_files import ls
 
 from typing import Any
 
@@ -34,9 +35,3 @@ def upload_by_targz_body(machine_id: str, workspace_id: str, path: str, body: by
     from .save_files import upload_by_targz_body as _upload_by_targz_body
 
     return _upload_by_targz_body(machine_id, workspace_id, path, body)
-
-
-def ls(path: str):
-    from .save_files import ls as _ls
-
-    return _ls(path)
