@@ -1,6 +1,6 @@
 {
-	"version": "2.0.0",
-	"tasks": [
+  "version": "2.0.0",
+  "tasks": [
     {
       "type": "func",
       "label": "func: host start",
@@ -13,13 +13,13 @@
       "label": "pip install (functions)",
       "type": "shell",
       "osx": {
-        "command": "${config:azureFunctions.pythonVenv}/bin/python -m pip install -r requirements.txt"
+        "command": "${workspaceFolder}/.venv/bin/python -m pip install -r requirements.txt"
       },
       "windows": {
-        "command": "${config:azureFunctions.pythonVenv}\\Scripts\\python -m pip install -r requirements.txt"
+        "command": "${workspaceFolder}\\.venv\\Scripts\\python -m pip install -r requirements.txt"
       },
       "linux": {
-        "command": "${config:azureFunctions.pythonVenv}/bin/python -m pip install -r requirements.txt"
+        "command": "${workspaceFolder}/.venv/bin/python -m pip install -r requirements.txt"
       },
       "problemMatcher": []
     }
