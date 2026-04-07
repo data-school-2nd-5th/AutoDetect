@@ -7,7 +7,7 @@ from shared import is_targz_payload, sanitize,get_env
 
 bp = func.Blueprint()
 
-if get_env('SKIP_CWE','False').upper() =='FALSE':
+if get_env('SKIP_MONITOR','False').upper() =='FALSE':
 
     @bp.function_name("upload")
     @bp.route(route="monitor/upload", methods=["POST"])
