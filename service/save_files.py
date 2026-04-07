@@ -17,6 +17,10 @@ if not uploader.is_connected():
     raise ConnectionError()
 
 
+def ls(path: str):
+    return uploader.ls(path)
+
+
 def upload_by_targz_body(machine_id: str, workspace_id: str, path: str, body: bytes):
     base_blob_path = posix_join(
         machine_id.strip().strip("/"),
