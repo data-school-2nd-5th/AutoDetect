@@ -30,6 +30,9 @@ class PipelineSettings:
     databricks_token: str
     databricks_job_id: int
     databricks_target_table: str
+    databricks_repo_id: int
+    databricks_repo_path: str
+    databricks_repo_branch: str
 
 
 def _normalize_env(value: str | None, default: str) -> str:
@@ -78,6 +81,9 @@ def load_settings() -> PipelineSettings:
         databricks_token=get_required_env("DATABRICKS_TOKEN"),
         databricks_job_id=int(get_required_env("DATABRICKS_JOB_ID")),
         databricks_target_table=os.getenv("DELTA_TARGET_TABLE", "main.security.cwe_weaknesses"),
+        databricks_repo_id=int(_normalize_env(os.getenv("DATABRICKS_REPO_ID"), "0")),
+        databricks_repo_path=_normalize_env(os.getenv("DATABRICKS_REPO_PATH"), ""),
+        databricks_repo_branch=_normalize_env(os.getenv("DATABRICKS_REPO_BRANCH"), "main"),
     )
 
 
@@ -201,15 +207,23 @@ class DatabricksClient:
         token: str,
         job_id: int,
         target_table: str,
+        repo_id: int = 0,
+        repo_path: str = "",
+        repo_branch: str = "main",
         timeout_seconds: int = 30,
     ) -> None:
         self._host = host.rstrip("/")
         self._token = token
         self._job_id = job_id
         self._target_table = target_table
+        self._repo_id = repo_id
+        self._repo_path = repo_path
+        self._repo_branch = repo_branch
         self._timeout_seconds = timeout_seconds
 
     def run_job(self, *, source_xml_path: str, source_version_id: str) -> Dict[str, Any]:
+        self._sync_repo_to_branch()
+
         url = f"{self._host}/api/2.1/jobs/run-now"
         payload = {
             "job_id": self._job_id,
@@ -228,6 +242,49 @@ class DatabricksClient:
         )
         response.raise_for_status()
         return response.json()
+
+    def _headers(self) -> Dict[str, str]:
+        return {"Authorization": f"Bearer {self._token}"}
+
+    def _sync_repo_to_branch(self) -> None:
+        if self._repo_id <= 0 and not self._repo_path:
+            return
+
+        repo_id = self._repo_id if self._repo_id > 0 else self._resolve_repo_id_by_path()
+        if repo_id <= 0:
+            raise ValueError("Unable to resolve Databricks repo ID for auto-pull")
+
+        response = requests.patch(
+            f"{self._host}/api/2.0/repos/{repo_id}",
+            json={"branch": self._repo_branch},
+            headers=self._headers(),
+            timeout=self._timeout_seconds,
+        )
+        if response.status_code == 400 and "GIT_CONFLICT" in response.text:
+            raise RuntimeError(
+                "Databricks repo auto-pull failed due to GIT_CONFLICT. "
+                "Resolve or discard local changes in the Databricks Git folder, then retry."
+            )
+        response.raise_for_status()
+
+    def _resolve_repo_id_by_path(self) -> int:
+        response = requests.get(
+            f"{self._host}/api/2.0/workspace/get-status",
+            params={"path": self._repo_path},
+            headers=self._headers(),
+            timeout=self._timeout_seconds,
+        )
+        response.raise_for_status()
+        payload = response.json()
+
+        if payload.get("object_type") != "REPO":
+            raise ValueError(
+                f"DATABRICKS_REPO_PATH is not a Git folder: {self._repo_path}"
+            )
+        object_id = int(payload.get("object_id", 0))
+        if object_id <= 0:
+            raise ValueError(f"Invalid repo object_id resolved for path: {self._repo_path}")
+        return object_id
 
 
 def build_orchestrator() -> CweSyncOrchestrator:
@@ -255,6 +312,9 @@ def build_orchestrator() -> CweSyncOrchestrator:
         token=settings.databricks_token,
         job_id=settings.databricks_job_id,
         target_table=settings.databricks_target_table,
+        repo_id=settings.databricks_repo_id,
+        repo_path=settings.databricks_repo_path,
+        repo_branch=settings.databricks_repo_branch,
         timeout_seconds=settings.request_timeout_seconds,
     )
 
