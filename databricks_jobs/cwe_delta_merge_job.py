@@ -153,6 +153,8 @@ def main() -> None:
     spark = SparkSession.getActiveSession() or SparkSession.builder.getOrCreate()
     xml_text = _read_xml_text(spark, source_xml_path)
     records = parse_cwe_weaknesses(xml_text)
+    if not records:
+        raise ValueError("No parsed CWE records to merge")
 
     ingested_at_utc = datetime.now(timezone.utc).isoformat()
     for record in records:
@@ -164,6 +166,11 @@ def main() -> None:
 
     _ensure_table(spark, target_table)
     _merge(spark, target_table)
+    target_count = spark.table(target_table).count()
+    print(
+        f"cwe_merge_summary parsed_records={len(records)} "
+        f"target_table={target_table} target_count={target_count}"
+    )
 
 
 if __name__ == "__main__":

@@ -16,8 +16,23 @@ from shared import (
 )
 
 
+def _strip_namespaces(node: ET.Element) -> None:
+    for element in node.iter():
+        if isinstance(element.tag, str) and element.tag.startswith("{"):
+            element.tag = element.tag.split("}", 1)[1]
+        if element.attrib:
+            cleaned = {}
+            for key, value in element.attrib.items():
+                if key.startswith("{"):
+                    key = key.split("}", 1)[1]
+                cleaned[key] = value
+            element.attrib.clear()
+            element.attrib.update(cleaned)
+
+
 def parse_cwe_weaknesses(xml_content: str | bytes) -> List[Dict[str, str]]:
     root = ET.fromstring(xml_content)
+    _strip_namespaces(root)
     rows: List[Dict[str, str]] = []
 
     for weakness in root.findall(".//Weakness"):
@@ -29,11 +44,6 @@ def parse_cwe_weaknesses(xml_content: str | bytes) -> List[Dict[str, str]]:
             if clean_text(modified.text)
         ]
         latest_modification = latest_modification_date(modification_dates)
-        if not latest_modification:
-            weakness_id = weakness.get("ID", "unknown")
-            raise ValueError(
-                f"Missing Content_History/Modification/Modification_Date for weakness {weakness_id}"
-            )
 
         row = {
             "weakness_id": weakness.get("ID", ""),
@@ -53,5 +63,8 @@ def parse_cwe_weaknesses(xml_content: str | bytes) -> List[Dict[str, str]]:
             "content_history_last_modified": latest_modification,
         }
         rows.append(row)
+
+    if not rows:
+        raise ValueError("No Weakness entries parsed from source XML")
 
     return rows

@@ -5,7 +5,7 @@ from service.cwe_parser import parse_cwe_weaknesses
 
 
 SAMPLE_XML = """<?xml version=\"1.0\" encoding=\"UTF-8\"?>
-<Weakness_Catalog xmlns:xhtml=\"http://www.w3.org/1999/xhtml\">
+<Weakness_Catalog xmlns=\"http://cwe.mitre.org/cwe-7\" xmlns:xhtml=\"http://www.w3.org/1999/xhtml\">
   <Weaknesses>
     <Weakness ID=\"200\" Name=\"Exposure of Sensitive Information to an Unauthorized Actor\" Abstraction=\"Class\" Structure=\"Simple\" Status=\"Draft\">
       <Description>The product exposes sensitive information to an actor that is not explicitly authorized to have access to that information.</Description>
@@ -90,13 +90,14 @@ class ParseCweWeaknessesTests(unittest.TestCase):
         self.assertEqual(2, len(observed))
         self.assertEqual("CVE-2022-31162", observed[0]["reference"])
 
-    def test_raises_when_modification_date_missing(self) -> None:
+    def test_allows_when_modification_date_missing(self) -> None:
         xml_without_modification = SAMPLE_XML.replace(
             "<Modification_Date>2025-09-09</Modification_Date>", ""
         ).replace("<Modification_Date>2025-12-11</Modification_Date>", "")
 
-        with self.assertRaises(ValueError):
-            parse_cwe_weaknesses(xml_without_modification)
+        rows = parse_cwe_weaknesses(xml_without_modification)
+        self.assertEqual(1, len(rows))
+        self.assertEqual("", rows[0]["content_history_last_modified"])
 
 
 if __name__ == "__main__":
