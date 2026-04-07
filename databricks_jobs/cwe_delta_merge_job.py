@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 import os
+from urllib.parse import urlparse
 from urllib.request import urlopen
 
 from pyspark.sql import SparkSession
@@ -19,14 +20,24 @@ def _get_param(name: str, default: str = "") -> str:
     return os.getenv(name.upper(), default)
 
 
+def _normalize_source_path(raw_path: str) -> str:
+    normalized = (raw_path or "").strip()
+    if len(normalized) >= 2:
+        if normalized[0] == normalized[-1] and normalized[0] in {"'", '"'}:
+            normalized = normalized[1:-1].strip()
+    return normalized
+
+
 def _read_xml_text(spark: SparkSession, source_xml_path: str) -> str:
-    if source_xml_path.startswith(("http://", "https://")):
-        with urlopen(source_xml_path, timeout=30) as response:
+    normalized_path = _normalize_source_path(source_xml_path)
+    scheme = urlparse(normalized_path).scheme.lower()
+    if scheme in {"http", "https"}:
+        with urlopen(normalized_path, timeout=30) as response:
             return response.read().decode("utf-8")
 
-    payload = spark.read.format("binaryFile").load(source_xml_path).select("content").first()
+    payload = spark.read.format("binaryFile").load(normalized_path).select("content").first()
     if payload is None:
-        raise ValueError(f"XML payload not found at {source_xml_path}")
+        raise ValueError(f"XML payload not found at {normalized_path}")
 
     return payload["content"].decode("utf-8")
 
@@ -130,7 +141,7 @@ def _merge(spark: SparkSession, target_table: str) -> None:
 
 
 def main() -> None:
-    source_xml_path = _get_param("source_xml_path")
+    source_xml_path = _normalize_source_path(_get_param("source_xml_path"))
     source_version_id = _get_param("source_version_id")
     target_table = _get_param("target_table", "main.security.cwe_weaknesses")
 

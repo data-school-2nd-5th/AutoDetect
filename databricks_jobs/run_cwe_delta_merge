@@ -1,6 +1,8 @@
 # Databricks notebook source
 import os
 import sys
+from urllib.parse import urlparse
+from urllib.request import urlopen
 
 
 def current_bindings() -> dict[str, str]:
@@ -33,7 +35,15 @@ def resolve_param(name: str, default: str = "") -> str:
     return default
 
 
-source_xml_path = resolve_param("source_xml_path", "")
+def normalize_path(raw_value: str) -> str:
+    normalized = (raw_value or "").strip()
+    if len(normalized) >= 2:
+        if normalized[0] == normalized[-1] and normalized[0] in {"'", '"'}:
+            normalized = normalized[1:-1].strip()
+    return normalized
+
+
+source_xml_path = normalize_path(resolve_param("source_xml_path", ""))
 source_version_id = resolve_param("source_version_id", "")
 target_table = resolve_param("target_table", "3dt2ndteam5.cwe.cwe_weaknesses")
 
@@ -51,6 +61,21 @@ repo_root = "/Workspace" + nb_path.split("/databricks_jobs/")[0]
 if repo_root not in sys.path:
     sys.path.insert(0, repo_root)
 
-from databricks_jobs.cwe_delta_merge_job import main
+import databricks_jobs.cwe_delta_merge_job as cwe_delta_merge_job
 
-main()
+
+def patched_read_xml_text(spark, source_xml_path):
+    normalized_path = normalize_path(source_xml_path)
+    scheme = urlparse(normalized_path).scheme.lower()
+    if scheme in {"http", "https"}:
+        with urlopen(normalized_path, timeout=60) as response:
+            return response.read().decode("utf-8")
+
+    payload = spark.read.format("binaryFile").load(normalized_path).select("content").first()
+    if payload is None:
+        raise ValueError(f"XML payload not found at {normalized_path}")
+    return payload["content"].decode("utf-8")
+
+
+cwe_delta_merge_job._read_xml_text = patched_read_xml_text
+cwe_delta_merge_job.main()
