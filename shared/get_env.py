@@ -1,5 +1,5 @@
 import os
-from typing import Optional
+from typing import overload, Union, Optional, Literal, Any
 
 class MissingEnvironmentVariableError(Exception):
     """환경 변수가 설정되지 않았을 때 발생하는 커스텀 예외"""
@@ -7,7 +7,24 @@ class MissingEnvironmentVariableError(Exception):
         self.message = f"필수 환경 변수 '{key}'가 설정되지 않았습니다."
         super().__init__(self.message)
 
-def get_env(key: str, default: Optional[str] = None, no_raise_exception: bool = False) -> Optional[str]:
+# 1. 예외를 발생하는 경우: 반환 타입은 무조건 str (Optional 제거)
+@overload
+def get_env(
+    key: str, 
+    default: Optional[str] = None, 
+    raise_exception: Literal[True] = True
+) -> str: ...
+
+# 2. 예외를 발생시키지 않는 경우: 반환 타입은 str 또는 None (Optional[str])
+@overload
+def get_env(
+    key: str, 
+    default: Optional[str] = None, 
+    raise_exception: Literal[False] = False
+) -> Optional[str]: ...
+
+# 3. 실제 실행 로직 (Implementation)
+def get_env(key: str, default: Optional[str] = None, raise_exception: bool = True) -> Any:
     """
     환경 변수를 가져옵니다. 
     값이 없고 no_raise_exception이 False인 경우 예외를 발생시킵니다.
@@ -17,7 +34,7 @@ def get_env(key: str, default: Optional[str] = None, no_raise_exception: bool = 
     if value is not None:
         return value
         
-    if no_raise_exception:
+    if not raise_exception:
         return default
         
     raise MissingEnvironmentVariableError(key)
