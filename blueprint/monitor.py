@@ -50,7 +50,9 @@ if get_env("SKIP_MONITOR", "False").upper() == "FALSE":
             return func.HttpResponse("Error processing request body", status_code=500)
 
     @bp.function_name("debug_ls")
-    @bp.route(route="monitor/debug/ls", methods=["get"])
+    @bp.route(
+        route="monitor/debug/ls", methods=["get"], auth_level=func.AuthLevel.ADMIN
+    )
     def debug_ls(req: func.HttpRequest):
         try:
             path = req.params.get("path")
