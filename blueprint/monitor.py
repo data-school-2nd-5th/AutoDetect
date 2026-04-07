@@ -3,11 +3,11 @@ import json
 import logging
 
 from service import upload_by_targz_body, ls
-from shared import is_targz_payload, sanitize,get_env
+from shared import is_targz_payload, sanitize, get_env
 
 bp = func.Blueprint()
 
-if get_env('SKIP_MONITOR','False').upper() =='FALSE':
+if get_env("SKIP_MONITOR", "False").upper() == "FALSE":
 
     @bp.function_name("upload")
     @bp.route(route="monitor/upload", methods=["POST"])
@@ -34,7 +34,8 @@ if get_env('SKIP_MONITOR','False').upper() =='FALSE':
                     f"Invalid payload format: Not a .tar.gz (Machine: {machine_id}, Path: {path})"
                 )
                 return func.HttpResponse(
-                    "Request body must be a valid .tar.gz binary payload", status_code=400
+                    "Request body must be a valid .tar.gz binary payload",
+                    status_code=400,
                 )
             logging.info(f"Received payload size: {len(body)} bytes")
             uploaded_list = upload_by_targz_body(machine_id, workspace_id, path, body)
@@ -48,12 +49,14 @@ if get_env('SKIP_MONITOR','False').upper() =='FALSE':
             logging.exception("Error reading request body")
             return func.HttpResponse("Error processing request body", status_code=500)
 
-
     @bp.function_name("debug_ls")
     @bp.route(route="monitor/debug/ls", methods=["get"])
     def debug_ls(req: func.HttpRequest):
-        path = req.params.get("path")
-        if not path:
-            return func.HttpResponse("No path provided", status_code=400)
-        res = ls(path)
-        return func.HttpResponse(json.dumps(res), mimetype="json")
+        try:
+            path = req.params.get("path")
+            if not path:
+                return func.HttpResponse("No path provided", status_code=400)
+            res = ls(path)
+            return func.HttpResponse(json.dumps(res), mimetype="application/json")
+        except:
+            return func.HttpResponse("Internal Server Error", status_code=500)
