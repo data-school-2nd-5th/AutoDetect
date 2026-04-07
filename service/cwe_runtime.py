@@ -11,7 +11,7 @@ import requests
 from azure.core.exceptions import ResourceNotFoundError
 from azure.storage.blob import BlobSasPermissions, BlobServiceClient, generate_blob_sas
 
-from service import CweSyncOrchestrator
+from .cwe_orchestrator import CweSyncOrchestrator
 from shared import get_required_env
 
 
