@@ -18,7 +18,7 @@ if get_env("SKIP_MONITOR", "False").upper() == "FALSE":
             machine_id = sanitize(req.headers.get("Machine-Id"), str)
             workspace_id = sanitize(req.headers.get("Workspace-Id"))
         except TypeError:
-            logging.error("Headers failed")
+            logging.error("Headers failed with " + f"{machine_id=}, {workspace_id=}")
             return func.HttpResponse("Header Error", status_code=400)
 
         logging.info(
