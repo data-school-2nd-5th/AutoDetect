@@ -20,12 +20,15 @@ BASE_COLUMNS = [
     "demonstrative_examples",
     "selected_observed_examples",
     "vulnerability_mapping_notes",
+]
+DERIVED_COLUMNS = ["search_text"]
+ALL_COLUMNS = BASE_COLUMNS + DERIVED_COLUMNS
+REMOVED_COLUMNS = {
+    "is_deprecated",
     "content_history_last_modified",
     "source_version_id",
     "ingested_at_utc",
-]
-DERIVED_COLUMNS = ["is_deprecated", "search_text"]
-ALL_COLUMNS = BASE_COLUMNS + DERIVED_COLUMNS
+}
 
 
 def _get_param(name: str, default: str = "") -> str:
@@ -86,28 +89,40 @@ def resolve_silver_table(*, target_table: str, silver_table: str = "") -> str:
     return f"{target}_silver"
 
 
+def _silver_schema_ddl() -> str:
+    return """
+        weakness_id STRING,
+        title STRING,
+        description STRING,
+        extended_description STRING,
+        alternative_terms STRING,
+        potential_mitigations STRING,
+        likelihood_of_exploit STRING,
+        demonstrative_examples STRING,
+        selected_observed_examples STRING,
+        vulnerability_mapping_notes STRING,
+        search_text STRING
+    """
+
+
 def _ensure_silver_table(spark: "SparkSession", silver_table: str) -> None:
     spark.sql(
         f"""
         CREATE TABLE IF NOT EXISTS {silver_table} (
-            weakness_id STRING,
-            title STRING,
-            description STRING,
-            extended_description STRING,
-            alternative_terms STRING,
-            potential_mitigations STRING,
-            likelihood_of_exploit STRING,
-            demonstrative_examples STRING,
-            selected_observed_examples STRING,
-            vulnerability_mapping_notes STRING,
-            content_history_last_modified STRING,
-            source_version_id STRING,
-            ingested_at_utc STRING,
-            is_deprecated BOOLEAN,
-            search_text STRING
+            {_silver_schema_ddl()}
         ) USING DELTA
         """
     )
+
+    existing_columns = {column.lower() for column in spark.table(silver_table).columns}
+    if existing_columns.intersection(REMOVED_COLUMNS):
+        spark.sql(
+            f"""
+            CREATE OR REPLACE TABLE {silver_table} (
+                {_silver_schema_ddl()}
+            ) USING DELTA
+            """
+        )
 
 
 def _enable_cdf(spark: "SparkSession", silver_table: str) -> None:
@@ -147,9 +162,8 @@ def _prepare_source_view(spark: "SparkSession", bronze_table: str) -> None:
         )
     )
 
-    silver_source_df = bronze_df.select(
+    silver_source_df = bronze_df.filter(~is_deprecated_expr).select(
         *[F.col(column_name) for column_name in BASE_COLUMNS],
-        is_deprecated_expr.alias("is_deprecated"),
         search_text_expr.alias("search_text"),
     )
     silver_source_df.createOrReplaceTempView("incoming_cwe_silver")

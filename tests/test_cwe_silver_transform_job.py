@@ -1,6 +1,8 @@
 import unittest
 
 from databricks_jobs.cwe_silver_transform_job import (
+    ALL_COLUMNS,
+    REMOVED_COLUMNS,
     compose_search_text,
     is_deprecated_title,
     resolve_silver_table,
@@ -54,6 +56,11 @@ class CweSilverTransformJobTests(unittest.TestCase):
     def test_resolve_silver_table_requires_target_when_not_explicit(self) -> None:
         with self.assertRaises(ValueError):
             resolve_silver_table(target_table="")
+
+    def test_silver_schema_excludes_removed_metadata(self) -> None:
+        self.assertIn("search_text", ALL_COLUMNS)
+        for removed in REMOVED_COLUMNS:
+            self.assertNotIn(removed, ALL_COLUMNS)
 
 
 if __name__ == "__main__":

@@ -8,7 +8,9 @@ Run `databricks_jobs/run_cwe_delta_merge.py` with:
 
 This run now does:
 1. Bronze merge (`cwe_weaknesses`)
-2. Silver sync (`cwe_weaknesses_silver`) with `is_deprecated` and `search_text`
+2. Silver sync (`cwe_weaknesses_silver`) with `search_text` only
+   - `DEPRECATED:` title records are excluded from Silver
+   - metadata columns (`content_history_last_modified`, `source_version_id`, `ingested_at_utc`) are excluded from Silver
 3. CDF enablement on Silver table
 
 ## 2) Validate Silver Table
@@ -19,9 +21,9 @@ FROM 3dt2ndteam5.cwe.cwe_weaknesses;
 SELECT COUNT(*) AS silver_count
 FROM 3dt2ndteam5.cwe.cwe_weaknesses_silver;
 
-SELECT COUNT(*) AS null_deprecated
+SELECT COUNT(*) AS deprecated_rows
 FROM 3dt2ndteam5.cwe.cwe_weaknesses_silver
-WHERE is_deprecated IS NULL;
+WHERE UPPER(TRIM(COALESCE(title, ''))) LIKE 'DEPRECATED:%';
 
 SELECT COUNT(*) AS empty_search_text
 FROM 3dt2ndteam5.cwe.cwe_weaknesses_silver
@@ -36,10 +38,8 @@ In Catalog Explorer -> Vector Search:
    - Source table: `3dt2ndteam5.cwe.cwe_weaknesses_silver`
    - Primary key: `weakness_id`
    - Embedding source column: `search_text`
-   - Sync columns: `weakness_id,title,description,extended_description,is_deprecated`
+   - Sync columns: `weakness_id,title,description,extended_description`
 
 ## 4) Query Contract (for retrieval owners)
-- Always exclude deprecated records:
-  - Standard endpoint filters: `{"is_deprecated": false}`
-  - Storage-optimized filters: `is_deprecated = false`
+- Deprecated records are already excluded at Silver build step.
 - If query contains `CWE-<number>`, use `weakness_id` equality filter as primary path.
