@@ -46,14 +46,17 @@ def normalize_path(raw_value: str) -> str:
 source_xml_path = normalize_path(resolve_param("source_xml_path", ""))
 source_version_id = resolve_param("source_version_id", "")
 target_table = resolve_param("target_table", "3dt2ndteam5.cwe.cwe_weaknesses")
+silver_table = resolve_param("silver_table", f"{target_table}_silver")
 
 dbutils.widgets.text("source_xml_path", source_xml_path)
 dbutils.widgets.text("source_version_id", source_version_id)
 dbutils.widgets.text("target_table", target_table)
+dbutils.widgets.text("silver_table", silver_table)
 
 os.environ["SOURCE_XML_PATH"] = dbutils.widgets.get("source_xml_path")
 os.environ["SOURCE_VERSION_ID"] = dbutils.widgets.get("source_version_id")
 os.environ["TARGET_TABLE"] = dbutils.widgets.get("target_table")
+os.environ["SILVER_TABLE"] = dbutils.widgets.get("silver_table")
 
 nb_path = dbutils.notebook.entry_point.getDbutils().notebook().getContext().notebookPath().get()
 base_path = nb_path.split("/databricks_jobs/")[0]
@@ -66,6 +69,7 @@ if repo_root not in sys.path:
     sys.path.insert(0, repo_root)
 
 import databricks_jobs.cwe_delta_merge_job as cwe_delta_merge_job
+import databricks_jobs.cwe_silver_transform_job as cwe_silver_transform_job
 
 
 def patched_read_xml_text(spark, source_xml_path):
@@ -83,3 +87,4 @@ def patched_read_xml_text(spark, source_xml_path):
 
 cwe_delta_merge_job._read_xml_text = patched_read_xml_text
 cwe_delta_merge_job.main()
+cwe_silver_transform_job.main()

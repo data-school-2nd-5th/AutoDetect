@@ -4,8 +4,6 @@ from __future__ import annotations
 Keep exports lazy so Databricks-side imports (e.g. ``service.cwe_parser``)
 do not eagerly import Azure SDK dependent modules.
 """
-from .cwe_orchestrator import CweSyncOrchestrator
-from .save_files import ls
 
 from typing import Any
 
@@ -22,6 +20,10 @@ def __getattr__(name: str) -> Any:
         from .cwe_orchestrator import CweSyncOrchestrator
 
         return CweSyncOrchestrator
+    if name == "ls":
+        from .save_files import ls
+
+        return ls
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
