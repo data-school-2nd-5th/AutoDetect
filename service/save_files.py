@@ -21,11 +21,10 @@ def ls(path: str):
     return uploader.ls(path)
 
 
-def upload_by_targz_body(machine_id: str, workspace_id: str, path: str, body: bytes):
+def upload_by_targz_body(machine_id: str, workspace_id: str,body: bytes):
     base_blob_path = posix_join(
         machine_id.strip().strip("/"),
         workspace_id.strip().strip("/"),
-        path.strip().strip("/"),
     )
     uploaded_blob_paths: list[str] = []
 

@@ -33,7 +33,7 @@ def build_orchestrator():
     return _build_orchestrator()
 
 
-def upload_by_targz_body(machine_id: str, workspace_id: str, path: str, body: bytes):
+def upload_by_targz_body(machine_id: str, workspace_id: str, body: bytes):
     from .save_files import upload_by_targz_body as _upload_by_targz_body
 
-    return _upload_by_targz_body(machine_id, workspace_id, path, body)
+    return _upload_by_targz_body(machine_id, workspace_id, body)

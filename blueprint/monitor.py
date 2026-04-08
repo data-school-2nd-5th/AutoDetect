@@ -17,7 +17,6 @@ if get_env("SKIP_MONITOR", "False").upper() == "FALSE":
         try:
             machine_id = sanitize(req.headers.get("Machine-Id"), str)
             workspace_id = sanitize(req.headers.get("Workspace-Id"))
-            path = sanitize(req.headers.get("Path"))
         except TypeError:
             logging.error("Headers failed")
             return func.HttpResponse("Header Error", status_code=400)
@@ -31,14 +30,14 @@ if get_env("SKIP_MONITOR", "False").upper() == "FALSE":
 
             if not is_targz_payload(body):
                 logging.error(
-                    f"Invalid payload format: Not a .tar.gz (Machine: {machine_id}, Path: {path})"
+                    f"Invalid payload format: Not a .tar.gz (Machine: {machine_id})"
                 )
                 return func.HttpResponse(
                     "Request body must be a valid .tar.gz binary payload",
                     status_code=400,
                 )
             logging.info(f"Received payload size: {len(body)} bytes")
-            uploaded_list = upload_by_targz_body(machine_id, workspace_id, path, body)
+            uploaded_list = upload_by_targz_body(machine_id, workspace_id, body)
             return func.HttpResponse(
                 json.dumps(uploaded_list),
                 status_code=201,
