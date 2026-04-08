@@ -14,11 +14,21 @@ if get_env("SKIP_MONITOR", "False").upper() == "FALSE":
     def upload(req: func.HttpRequest):
         logging.info("Python HTTP trigger function processed an upload request.")
 
+        # 1. 헤더에서 값을 먼저 가져오기
+        raw_machine_id = req.headers.get("Machine-Id")
+        raw_workspace_id = req.headers.get("Workspace-Id")
+
         try:
-            machine_id = sanitize(req.headers.get("Machine-Id"), str)
-            workspace_id = sanitize(req.headers.get("Workspace-Id"))
-        except TypeError:
-            logging.error("Headers failed with " + f"{machine_id=}, {workspace_id=}")
+            # 2. 값의 존재 여부 확인 및 sanitize
+            if raw_machine_id is None or raw_workspace_id is None:
+                raise TypeError("Missing required headers")
+                
+            machine_id = sanitize(raw_machine_id, str)
+            workspace_id = sanitize(raw_workspace_id, str)
+            
+        except TypeError as e:
+            # 안전한 로깅: 할당되지 않았을 수 있는 변수 대신 raw 값을 사용
+            logging.error(f"Headers validation failed: {str(e)} | Raw IDs: machine={raw_machine_id}, workspace={raw_workspace_id}")
             return func.HttpResponse("Header Error", status_code=400)
 
         logging.info(
