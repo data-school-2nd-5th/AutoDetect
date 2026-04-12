@@ -6,12 +6,14 @@ do not eagerly import Azure SDK dependent modules.
 """
 
 from typing import Any
+from .analyze import analyze
 
 __all__ = [
     "CweSyncOrchestrator",
     "build_orchestrator",
     "upload_by_targz_body",
     "ls",
+    "analyze",
 ]
 
 
