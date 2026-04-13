@@ -27,7 +27,7 @@ def get_env(
 def get_env(key: str, default: Optional[str] = None, raise_exception: bool = True) -> Any:
     """
     환경 변수를 가져옵니다. 
-    값이 없고 no_raise_exception이 False인 경우 예외를 발생시킵니다.
+    값이 없고 raise_exception이 True인 경우 예외를 발생시킵니다. (기본값: True)
     """
     value = os.getenv(key, default)
     
