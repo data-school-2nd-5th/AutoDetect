@@ -20,9 +20,10 @@ if get_env("SKIP_MONITOR", "False").upper() == "FALSE":
 
         try:
             # 2. 값의 존재 여부 확인 및 sanitize
-            if raw_machine_id is None or raw_workspace_id is None:
-                raise TypeError("Missing required headers")
-
+            if raw_machine_id is None:
+                raise TypeError("Missing required header: Machine-Id")
+            if raw_workspace_id is None:
+                raise TypeError("Missing required header: Workspace-Id")
             machine_id = sanitize(raw_machine_id, str)
             workspace_id = sanitize(raw_workspace_id, str)
 
@@ -73,8 +74,12 @@ if get_env("SKIP_MONITOR", "False").upper() == "FALSE":
 
         try:
             # 2. 값의 존재 여부 확인 및 sanitize
-            if raw_machine_id is None or raw_workspace_id is None or file_name is None:
-                raise TypeError("Missing required headers")
+            if raw_machine_id is None:
+                raise TypeError("Missing required header: Machine-Id")
+            if raw_workspace_id is None:
+                raise TypeError("Missing required header: Workspace-Id")
+            if file_name is None:
+                raise TypeError("Missing required header: File-Name")
 
             machine_id = sanitize(raw_machine_id, str)
             workspace_id = sanitize(raw_workspace_id, str)
