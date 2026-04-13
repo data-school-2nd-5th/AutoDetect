@@ -3,12 +3,13 @@ from .get_env import get_env
 
 class AzureBlobUploader:
     def __init__(self, sas_url: str, sas_token: str):
-        self.base_url = sas_url
-        self.sas_token = sas_token
-        self.full_url = f"{self.base_url}?{self.sas_token}"
-        self.container_client = ContainerClient.from_container_url(self.full_url)
-        container_properties = self.container_client.get_container_properties()  # 연결 테스트
-        print(f"컨테이너 연결 성공: {container_properties.name}")
+        # self.base_url = sas_url
+        # self.sas_token = sas_token
+        # self.full_url = f"{self.base_url}?{self.sas_token}"
+        # self.container_client = ContainerClient.from_container_url(self.full_url)
+        # container_properties = self.container_client.get_container_properties()  # 연결 테스트
+        # print(f"컨테이너 연결 성공: {container_properties.name}")
+        pass
 
     def upload_text(self, file_name: str, content: str):
         """

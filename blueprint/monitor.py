@@ -101,7 +101,7 @@ if get_env("SKIP_MONITOR", "False").upper() == "FALSE":
             logging.info(f"Received script content size: {len(text)} characters")
             if print_file:
                 logging.info(f"Script content:\n{text}")
-            results = analyze(text)
+            results = analyze(machine_id, workspace_id, text)
             return func.HttpResponse(
                 json.dumps(results),
                 status_code=200,

@@ -6,6 +6,8 @@ from azure.core.exceptions import AzureError
 from azure.core.exceptions import ResourceExistsError
 from azure.storage.blob import BlobServiceClient
 
+from service.get_env import get_env
+
 
 class UploadBlob:
     def __init__(self, connection_string: str, container_name: str) -> None:
@@ -63,6 +65,7 @@ class UploadBlob:
         )
         blob_client.upload_blob(content, overwrite=True)
         return normalized_blob_path
+
     def save_text(self, content: str, blob_path: str) -> str:
         normalized_blob_path = blob_path.strip().lstrip("/")
 
@@ -86,13 +89,14 @@ class UploadBlob:
         if normalized_path and not normalized_path.endswith("/"):
             normalized_path += "/"
 
-        container_client = self._blob_service_client.get_container_client(self._container_name)
-        
+        container_client = self._blob_service_client.get_container_client(
+            self._container_name
+        )
+
         try:
             # list_blobs 대신 walk_blobs를 사용하면 디렉토리(Prefix) 구분이 훨씬 쉽습니다.
             blob_iter = container_client.walk_blobs(
-                name_starts_with=normalized_path, 
-                delimiter="/"
+                name_starts_with=normalized_path, delimiter="/"
             )
 
             files = []
@@ -100,36 +104,64 @@ class UploadBlob:
 
             for item in blob_iter:
                 # 1. 디렉토리(BlobPrefix)인 경우
-                if hasattr(item, 'prefix'):
+                if hasattr(item, "prefix"):
                     # item은 BlobPrefix 객체이며, 'prefix' 속성에 경로가 담겨 있습니다.
                     dir_full_path = item.prefix
                     dir_name = dir_full_path.rstrip("/").split("/")[-1]
-                    directories.append({
-                        "name": dir_name,
-                        "full_path": dir_full_path,
-                        "type": "directory"
-                    })
-                
+                    directories.append(
+                        {
+                            "name": dir_name,
+                            "full_path": dir_full_path,
+                            "type": "directory",
+                        }
+                    )
+
                 # 2. 일반 파일(BlobProperties)인 경우
                 else:
                     if item.name == normalized_path:
                         continue
-                    
-                    files.append({
-                        "name": item.name.split("/")[-1],
-                        "full_path": item.name,
-                        "type": "file",
-                        "size": item.size,
-                        "last_modified": item.last_modified.isoformat() if item.last_modified else None
-                    })
+
+                    files.append(
+                        {
+                            "name": item.name.split("/")[-1],
+                            "full_path": item.name,
+                            "type": "file",
+                            "size": item.size,
+                            "last_modified": (
+                                item.last_modified.isoformat()
+                                if item.last_modified
+                                else None
+                            ),
+                        }
+                    )
 
             return {
                 "path": normalized_path,
                 "directories": directories,
                 "files": files,
-                "count": len(directories) + len(files)
+                "count": len(directories) + len(files),
             }
 
         except AzureError as e:
             logging.error(f"Failed to list blobs in {normalized_path}: {str(e)}")
             raise e
+
+
+connection_string = get_env("UPLOAD_CONNECTION_STRING")
+container_name = get_env("UPLOAD_CONTAINER_NAME")
+if not connection_string:
+    logging.warning(
+        "UPLOAD_CONNECTION_STRING is not set. Blob operations will fail until it is configured."
+    )
+    raise ValueError(
+        "Missing required environment variable: UPLOAD_CONNECTION_STRING"
+    )
+if not container_name:
+    logging.warning(
+        "UPLOAD_CONTAINER_NAME is not set. Using default container name 'default-container'."
+    )
+    raise ValueError(
+        "Missing required environment variable: UPLOAD_CONTAINER_NAME"
+    )
+
+blob_controller = UploadBlob(connection_string, container_name)
