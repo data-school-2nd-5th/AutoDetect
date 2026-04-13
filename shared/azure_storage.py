@@ -2,14 +2,12 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 from typing import Dict, Any
-from azure.core.exceptions import AzureError
-from azure.core.exceptions import ResourceExistsError
+from azure.core.exceptions import AzureError, ResourceExistsError
 from azure.storage.blob import BlobServiceClient
-
 from service.get_env import get_env
 
 
-class UploadBlob:
+class AzureStorage:
     def __init__(self, connection_string: str, container_name: str) -> None:
         self._blob_service_client = BlobServiceClient.from_connection_string(
             connection_string
@@ -164,4 +162,4 @@ if not container_name:
         "Missing required environment variable: UPLOAD_CONTAINER_NAME"
     )
 
-blob_controller = UploadBlob(connection_string, container_name)
+azure_storage_manager = AzureStorage(connection_string, container_name)

@@ -45,10 +45,10 @@ __all__ = [
 
 def __getattr__(name: str):
     if name in {"UploadBlob", "ResourceExistsError"}:
-        from .upload_blob import ResourceExistsError, UploadBlob
+        from .azure_storage import ResourceExistsError, AzureStorage
 
         return {
-            "UploadBlob": UploadBlob,
+            "UploadBlob": AzureStorage,
             "ResourceExistsError": ResourceExistsError,
         }[name]
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
