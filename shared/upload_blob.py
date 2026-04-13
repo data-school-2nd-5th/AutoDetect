@@ -63,6 +63,18 @@ class UploadBlob:
         )
         blob_client.upload_blob(content, overwrite=True)
         return normalized_blob_path
+    def save_text(self, content: str, blob_path: str) -> str:
+        normalized_blob_path = blob_path.strip().lstrip("/")
+
+        if not normalized_blob_path:
+            raise ValueError("Blob path must not be empty.")
+
+        blob_client = self._blob_service_client.get_blob_client(
+            container=self._container_name,
+            blob=normalized_blob_path,
+        )
+        blob_client.upload_blob(content, overwrite=True)
+        return normalized_blob_path
 
     def ls(self, path: str) -> Dict[str, Any]:
         """
