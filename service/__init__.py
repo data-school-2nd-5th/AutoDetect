@@ -11,6 +11,9 @@ from .analyze import analyze
 __all__ = [
     "CweSyncOrchestrator",
     "build_orchestrator",
+    "build_failure_alert_payload",
+    "send_alert_payload",
+    "notify_failure_alert",
     "upload_by_targz_body",
     "ls",
     "analyze",
@@ -26,6 +29,22 @@ def __getattr__(name: str) -> Any:
         from .save_files import ls
 
         return ls
+    if name in {
+        "build_failure_alert_payload",
+        "send_alert_payload",
+        "notify_failure_alert",
+    }:
+        from .alerting import (
+            build_failure_alert_payload,
+            notify_failure_alert,
+            send_alert_payload,
+        )
+
+        return {
+            "build_failure_alert_payload": build_failure_alert_payload,
+            "send_alert_payload": send_alert_payload,
+            "notify_failure_alert": notify_failure_alert,
+        }[name]
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
