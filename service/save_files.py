@@ -1,29 +1,17 @@
-import logging
 import tarfile
 from io import BytesIO
-from pathlib import Path
 from posixpath import join as posix_join
 
-from shared import UploadBlob, get_env, parse_args
-
-
-CONNECTION_STRING = get_env("UPLOAD_CONNECTION_STRING")
-CONTAINER_NAME = get_env("UPLOAD_CONTAINER_NAME")
-
-uploader = UploadBlob(CONNECTION_STRING, CONTAINER_NAME)
-
-if not uploader.is_connected():
-    logging.error("Uploader is not connected")
-    raise ConnectionError()
+from shared import azure_storage_manager
 
 
 def ls(path: str):
-    return uploader.ls(path)
+    return azure_storage_manager.ls(path)
 
 
-def upload_by_targz_body(machine_id: str, workspace_id: str,body: bytes):
+def upload_by_targz_body(machine_id: str, workspace_id: str, body: bytes):
     base_blob_path = posix_join(
-        'workspaces',
+        "workspaces",
         workspace_id.strip().strip("/"),
     )
     uploaded_blob_paths: list[str] = []
@@ -42,7 +30,18 @@ def upload_by_targz_body(machine_id: str, workspace_id: str,body: bytes):
                 continue
 
             blob_path = posix_join(base_blob_path, member_path)
-            uploaded_blob_path = uploader.save_bytes(extracted_file.read(), blob_path)
+            uploaded_blob_path = azure_storage_manager.save_bytes(
+                extracted_file.read(), blob_path
+            )
             uploaded_blob_paths.append(uploaded_blob_path)
 
     return uploaded_blob_paths
+
+def upload_by_text(machine_id: str, workspace_id: str, text: str):
+    base_blob_path = posix_join(
+        "workspaces",
+        workspace_id.strip().strip("/"),
+    )
+    blob_path = posix_join(base_blob_path, "work.js")
+    uploaded_blob_path = azure_storage_manager.save_text(text, blob_path)
+    return uploaded_blob_path

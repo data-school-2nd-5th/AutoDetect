@@ -1,8 +1,8 @@
-from shared.azure_storage import azure_storage_manager
+from .save_files import upload_by_text
 
 def analyze(machine_id:str, workspace_id:str, text: str) -> list[dict]:
     ## Add your analysis code here
-    azure_storage_manager.save_text(text, f"/workspaces/{workspace_id}/work.js")
+    path = upload_by_text(machine_id, workspace_id, text)
     ## Example response format
     return [
         {

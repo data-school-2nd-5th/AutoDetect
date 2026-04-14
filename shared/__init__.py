@@ -19,10 +19,12 @@ from .helper import (
     utc_now,
 )
 from .get_env import get_env
+from .azure_storage import ResourceExistsError, azure_storage_manager
 
 __all__ = [
     "UploadBlob",
     "ResourceExistsError",
+    "azure_storage_manager",
     "clean_text",
     "extract_xml_payload",
     "get_env",
@@ -41,19 +43,6 @@ __all__ = [
     "to_bool",
     "utc_now",
 ]
-
-
-def __getattr__(name: str):
-    if name in {"UploadBlob", "ResourceExistsError"}:
-        from .azure_storage import ResourceExistsError, AzureStorage
-
-        return {
-            "UploadBlob": AzureStorage,
-            "ResourceExistsError": ResourceExistsError,
-        }[name]
-    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
-
-
 T = TypeVar("T")
 
 

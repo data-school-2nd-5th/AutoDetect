@@ -1,4 +1,5 @@
 from __future__ import annotations
+
 """Service package.
 
 Keep exports lazy so Databricks-side imports (e.g. ``service.cwe_parser``)
@@ -17,6 +18,7 @@ __all__ = [
     "upload_by_targz_body",
     "ls",
     "analyze",
+    "upload_by_text",
 ]
 
 
@@ -58,3 +60,9 @@ def upload_by_targz_body(machine_id: str, workspace_id: str, body: bytes):
     from .save_files import upload_by_targz_body as _upload_by_targz_body
 
     return _upload_by_targz_body(machine_id, workspace_id, body)
+
+
+def upload_by_text(machine_id: str, workspace_id: str, text: str):
+    from .save_files import upload_by_text as _upload_by_text
+
+    return _upload_by_text(machine_id, workspace_id, text)
