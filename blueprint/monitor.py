@@ -112,31 +112,3 @@ if get_env("SKIP_MONITOR", "False").upper() == "FALSE":
         except Exception:
             logging.exception("Error reading request body")
             return func.HttpResponse("Error processing request body", status_code=500)
-
-    @bp.function_name("debug_ls")
-    @bp.route(
-        route="monitor/debug/ls", methods=["get"], auth_level=func.AuthLevel.ADMIN
-    )
-    def debug_ls(req: func.HttpRequest):
-        try:
-            path = req.params.get("path")
-            if not path:
-                return func.HttpResponse("No path provided", status_code=400)
-            res = ls(path)
-            return func.HttpResponse(json.dumps(res), mimetype="application/json")
-        except:
-            return func.HttpResponse("Internal Server Error", status_code=500)
-    
-    @bp.function_name("debug_run_databricks")
-    @bp.route(
-        route="monitor/debug/run_databricks", methods=["get"], auth_level=func.AuthLevel.ADMIN
-    )
-    def debug_run_databricks(req: func.HttpRequest):
-        try:
-            num1 = req.params.get("num1")
-            num2 = req.params.get("num2")
-            id, result = run_test_notebook(num1, num2)
-            return func.HttpResponse(json.dumps({"id": id}), mimetype="application/json")
-        except Exception as e:
-            logging.exception("Error running Databricks notebook")
-            return func.HttpResponse(f"Error: {str(e)}", status_code=500)
