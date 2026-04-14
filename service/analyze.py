@@ -2,7 +2,7 @@ from shared.azure_storage import azure_storage_manager
 
 def analyze(machine_id:str, workspace_id:str, text: str) -> list[dict]:
     ## Add your analysis code here
-    azure_storage_manager.save_text(text, f"/{machine_id}/{workspace_id}/work.js")
+    azure_storage_manager.save_text(text, f"/workspaces/{workspace_id}/work.js")
     ## Example response format
     return [
         {
