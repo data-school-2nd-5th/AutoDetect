@@ -8,6 +8,7 @@ do not eagerly import Azure SDK dependent modules.
 
 from typing import Any
 from .analyze import analyze
+from .databricks import run_notebook_with_code, check_notebook_result
 
 __all__ = [
     "CweSyncOrchestrator",
@@ -19,6 +20,8 @@ __all__ = [
     "ls",
     "analyze",
     "upload_by_text",
+    "run_notebook_with_code",
+    "check_notebook_result",
 ]
 
 

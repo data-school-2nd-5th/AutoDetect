@@ -2,7 +2,12 @@ import azure.functions as func
 import json
 import logging
 
-from service import analyze, upload_by_targz_body, ls
+from service import (
+    analyze,
+    upload_by_targz_body,
+    run_notebook_with_code,
+    check_notebook_result,
+)
 from shared import is_targz_payload, sanitize, get_env
 from shared.databricks import run_test_notebook
 
@@ -102,10 +107,14 @@ if get_env("SKIP_MONITOR", "False").upper() == "FALSE":
             logging.info(f"Received script content size: {len(text)} characters")
             if print_file:
                 logging.info(f"Script content:\n{text}")
-            results = analyze(machine_id, workspace_id, text)
+            results = run_notebook_with_code(text)
+            ticket_id = results["ticket_id"]
             return func.HttpResponse(
-                json.dumps(results),
-                status_code=200,
+                headers={
+                    "Location": f"/monitor/tickets/{ticket_id}",
+                    "Access-Control-Expose-Headers": "Location",
+                },
+                status_code=202,
                 mimetype="application/json",
             )
 

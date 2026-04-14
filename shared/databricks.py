@@ -1,4 +1,4 @@
-from databricks.sdk.service.jobs import Wait, Run, RunLifeCycleState, RunResultState
+from databricks.sdk.service.jobs import RunLifeCycleState, RunResultState
 from databricks.sdk import WorkspaceClient
 from shared import get_env
 import uuid
@@ -60,26 +60,8 @@ def check_job_status(ticket_id: str):
 
 
 def run_test_notebook(num1: str, num2: str):
-    job_id = "588467920967662"
     params = {"num1": num1, "num2": num2}
-    id, result = run_databricks_notebook(job_id=job_id, params=params)
+    id, result = run_databricks_notebook(params=params)
     print(f"Notebook run successful with ID: {id}")
     print(f"Notebook result: {result}")
     return id, result
-
-
-# --- VSCode에서 호출할 진입점 함수들 ---
-
-
-def run_code_notebook(code_snippet: str):
-    """[POST] VSCode가 처음 실행 버튼을 눌렀을 때 호출"""
-    params = {"code_snippet": code_snippet}
-    ticket_id, run_id = run_databricks_notebook(params=params)
-    print(f"Notebook run successful with ID: {ticket_id}")
-    print(f"Notebook result: {run_id}")
-    return {"ticket_id": ticket_id, "run_id": run_id}
-
-
-def poll_result(ticket_id: str):
-    """[GET] VSCode가 5초마다 호출"""
-    return check_job_status(ticket_id)
