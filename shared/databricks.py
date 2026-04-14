@@ -12,7 +12,7 @@ wc = WorkspaceClient(host=host, token=token)
 job_dict = dict()
 
 
-def run_databricks_notebook(job_id: str, params=None):
+def run_databricks_notebook(params=None):
     """실행을 트리거하고 즉시 run_id를 반환합니다."""
     try:
         # run_now는 대기하지 않고 즉시 실행 정보를 담은 객체를 반환함
@@ -51,7 +51,7 @@ def check_job_status(ticket_id: str):
     if run_info.state.result_state == RunResultState.SUCCESS:
         output = wc.jobs.get_run_output(run_id=run_id)
         return {"status": "SUCCESS", "result": output.notebook_output, "run_id": run_id}
-    else:
+    elif run_info.state.result_state == RunResultState.FAILED:
         return {
             "status": "FAILED",
             "reason": str(run_info.state.state_message),
@@ -67,17 +67,18 @@ def run_test_notebook(num1: str, num2: str):
     print(f"Notebook result: {result}")
     return id, result
 
+
 # --- VSCode에서 호출할 진입점 함수들 ---
+
 
 def run_code_notebook(code_snippet: str):
     """[POST] VSCode가 처음 실행 버튼을 눌렀을 때 호출"""
-    job_id = "507598107786619"
     params = {"code_snippet": code_snippet}
-    
-    ticket_id, run_id = run_databricks_notebook(job_id=job_id, params=params)
+    ticket_id, run_id = run_databricks_notebook(params=params)
     print(f"Notebook run successful with ID: {ticket_id}")
     print(f"Notebook result: {run_id}")
     return {"ticket_id": ticket_id, "run_id": run_id}
+
 
 def poll_result(ticket_id: str):
     """[GET] VSCode가 5초마다 호출"""
