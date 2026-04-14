@@ -4,7 +4,7 @@ from pathlib import Path
 from typing import Dict, Any
 from azure.core.exceptions import AzureError, ResourceExistsError
 from azure.storage.blob import BlobServiceClient
-from service.get_env import get_env
+from shared import get_env
 
 
 class AzureStorage:
@@ -147,19 +147,5 @@ class AzureStorage:
 
 connection_string = get_env("UPLOAD_CONNECTION_STRING")
 container_name = get_env("UPLOAD_CONTAINER_NAME")
-if not connection_string:
-    logging.warning(
-        "UPLOAD_CONNECTION_STRING is not set. Blob operations will fail until it is configured."
-    )
-    raise ValueError(
-        "Missing required environment variable: UPLOAD_CONNECTION_STRING"
-    )
-if not container_name:
-    logging.warning(
-        "UPLOAD_CONTAINER_NAME is not set. Using default container name 'default-container'."
-    )
-    raise ValueError(
-        "Missing required environment variable: UPLOAD_CONTAINER_NAME"
-    )
 
 azure_storage_manager = AzureStorage(connection_string, container_name)
