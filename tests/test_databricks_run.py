@@ -1,5 +1,7 @@
 import requests
 
+code_snippet = "Object.keys(process.env).forEach(function (key) {cgiData[key] = process.env[key];});"
+
 
 def test(num1, num2):
     response = requests.get(

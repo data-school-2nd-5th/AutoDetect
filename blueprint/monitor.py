@@ -133,8 +133,8 @@ if get_env("SKIP_MONITOR", "False").upper() == "FALSE":
     )
     def debug_run_databricks(req: func.HttpRequest):
         try:
-            num1 = req.params.get("num1", "10")
-            num2 = req.params.get("num2", "20")
+            num1 = req.params.get("num1")
+            num2 = req.params.get("num2")
             id, result = run_test_notebook(num1, num2)
             return func.HttpResponse(json.dumps({"id": id}), mimetype="application/json")
         except Exception as e:
