@@ -7,8 +7,6 @@ do not eagerly import Azure SDK dependent modules.
 """
 
 from typing import Any
-from .analyze import analyze
-from .databricks import run_notebook_with_code, check_notebook_result
 
 __all__ = [
     "CweSyncOrchestrator",
@@ -69,3 +67,21 @@ def upload_by_text(machine_id: str, workspace_id: str, text: str):
     from .save_files import upload_by_text as _upload_by_text
 
     return _upload_by_text(machine_id, workspace_id, text)
+
+
+def analyze(machine_id: str, workspace_id: str, text: str):
+    from .analyze import analyze as _analyze
+
+    return _analyze(machine_id, workspace_id, text)
+
+
+def run_notebook_with_code(code: str):
+    from .databricks import run_notebook_with_code as _run_notebook_with_code
+
+    return _run_notebook_with_code(code)
+
+
+def check_notebook_result(ticket_id: str):
+    from .databricks import check_notebook_result as _check_notebook_result
+
+    return _check_notebook_result(ticket_id)

@@ -19,8 +19,6 @@ from .helper import (
     utc_now,
 )
 from .get_env import get_env
-from .azure_storage import ResourceExistsError, azure_storage_manager
-from .databricks import run_databricks_notebook, check_job_status
 
 __all__ = [
     "UploadBlob",
@@ -51,3 +49,21 @@ def sanitize(d: Any, t: Type[T]) -> T:
     if not isinstance(d, t):
         raise TypeError(f"Expected {t}, but got {type(d)}")
     return d
+
+
+def __getattr__(name: str) -> Any:
+    if name in {"ResourceExistsError", "azure_storage_manager"}:
+        from .azure_storage import ResourceExistsError, azure_storage_manager
+
+        return {
+            "ResourceExistsError": ResourceExistsError,
+            "azure_storage_manager": azure_storage_manager,
+        }[name]
+    if name in {"run_databricks_notebook", "check_job_status"}:
+        from .databricks import check_job_status, run_databricks_notebook
+
+        return {
+            "run_databricks_notebook": run_databricks_notebook,
+            "check_job_status": check_job_status,
+        }[name]
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
