@@ -3,13 +3,11 @@ import json
 import logging
 
 from service import (
-    analyze,
     upload_by_targz_body,
     run_notebook_with_code,
     check_notebook_result,
 )
 from shared import is_targz_payload, sanitize, get_env
-from shared.databricks import run_test_notebook
 
 bp = func.Blueprint()
 
@@ -121,3 +119,21 @@ if get_env("SKIP_MONITOR", "False").upper() == "FALSE":
         except Exception:
             logging.exception("Error reading request body")
             return func.HttpResponse("Error processing request body", status_code=500)
+    
+    @bp.function_name("check_notebook_result_by_ticket")
+    @bp.route(route="monitor/tickets/{ticket_id}", methods=["get"])
+    def check_notebook_result_by_ticket(req: func.HttpRequest):
+        ticket_id = req.route_params.get("ticket_id", "")
+        logging.info(f"Checking notebook result for ticket_id={ticket_id}")
+        try:
+            result = check_notebook_result(ticket_id)
+            if result is None:
+                return func.HttpResponse("Ticket not found", status_code=404)
+            return func.HttpResponse(
+                json.dumps(result),
+                status_code=200,
+                mimetype="application/json",
+            )
+        except Exception:
+            logging.exception("Error checking notebook result")
+            return func.HttpResponse("Error processing request", status_code=500)
