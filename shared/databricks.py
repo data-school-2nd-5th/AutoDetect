@@ -9,7 +9,7 @@ from enum import Enum
 
 host = get_env("DATABRICKS_WORKSPACE_HOST")
 token = get_env("DATABRICKS_WORKSPACE_TOKEN")
-job_id = get_env("DATABRICKS_JOB_ID", "507598107786619")
+job_id = get_env("DATABRICKS_WORKSPACE_JOB_ID", "507598107786619")
 wc = WorkspaceClient(host=host, token=token)
 
 job_dict = dict()
