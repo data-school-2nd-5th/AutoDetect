@@ -82,13 +82,24 @@ def _task_summary(task):
     }
 
 
+dprint = lambda x: print(f"[DEBUG:check_job_status] {x}")
+
+
 def check_job_status(ticket_id: str):
     """Check Databricks run status by ticket id."""
+    dprint(f"Checking job status for ticket_id={ticket_id}")
     if ticket_id not in job_dict:
+        dprint(f"Ticket ID {ticket_id} not found.")
+        list_jobs = wc.jobs.list()
+        dprint(f"Current jobs in workspace: {[job.job_id for job in list_jobs]}")
+        dict_job = {k: v for k, v in job_dict.items()}
+        dprint(f"Current job_dict: {dict_job}")
         return {"status": "NOT_FOUND"}
 
     run_id = job_dict[ticket_id]
+    dprint(f"Found run_id={run_id} for ticket_id={ticket_id}")
     run_info = wc.jobs.get_run(run_id=run_id)
+    dprint(f"Retrieved run_info for run_id={run_id}: {run_info}")
 
     lifecycle = run_info.state.life_cycle_state
     task_runs = getattr(run_info, "tasks", None) or []
@@ -98,6 +109,7 @@ def check_job_status(ticket_id: str):
         RunLifeCycleState.SKIPPED,
         RunLifeCycleState.INTERNAL_ERROR,
     ]:
+        dprint(f"Run {run_id} is still in lifecycle state: {lifecycle}")
         return {
             "status": "RUNNING",
             "run_id": run_id,
@@ -105,6 +117,7 @@ def check_job_status(ticket_id: str):
         }
 
     if run_info.state.result_state == RunResultState.SUCCESS:
+        dprint(f"Run {run_id} completed successfully.")
         if task_runs:
             task_outputs = []
             for task in task_runs:
@@ -120,6 +133,9 @@ def check_job_status(ticket_id: str):
                     task_output = wc.jobs.get_run_output(run_id=task_run_id)
                     info["output"] = _json_safe(task_output.notebook_output)
                 except Exception as e:
+                    dprint(
+                        f"Error occurred while fetching output for task {task_run_id}: {e}"
+                    )
                     info["output"] = None
                     info["error"] = str(e)
 
@@ -135,13 +151,16 @@ def check_job_status(ticket_id: str):
         }
 
     if run_info.state.result_state == RunResultState.FAILED:
+        dprint(f"Run {run_id} failed.")
         return {
             "status": "FAILED",
             "reason": str(run_info.state.state_message),
             "run_id": run_id,
             "tasks": [_task_summary(task) for task in task_runs],
         }
-
+    dprint(
+        f"Run {run_id} ended with unknown result state: {run_info.state.result_state}"
+    )
     return {
         "status": "UNKNOWN",
         "run_id": run_id,
