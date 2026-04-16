@@ -1,0 +1,3502 @@
+{
+  "datasets": [
+    {
+      "name": "ds_cwe_counts",
+      "displayName": "CWE Counts",
+      "queryLines": [
+        "WITH counts AS (\n",
+        "  SELECT\n",
+        "    (SELECT COUNT(*) FROM 3dt2ndteam5.cwe.cwe_weaknesses) AS bronze_count,\n",
+        "    (SELECT COUNT(*) FROM 3dt2ndteam5.cwe.cwe_weaknesses_silver) AS silver_count\n",
+        ")\n",
+        "SELECT\n",
+        "  current_timestamp() AS generated_at_utc,\n",
+        "  from_utc_timestamp(current_timestamp(), 'Asia/Seoul') AS generated_at_kst,\n",
+        "  bronze_count,\n",
+        "  silver_count,\n",
+        "  bronze_count - silver_count AS count_gap\n",
+        "FROM counts;"
+      ]
+    },
+    {
+      "name": "ds_cwe_job_overall_latest",
+      "displayName": "CWE Job Overall Latest",
+      "queryLines": [
+        "WITH params AS (\n",
+        "  SELECT\n",
+        "    30 AS p_window_days,\n",
+        "    lower('cwe') AS p_job_keyword,\n",
+        "    CAST('1001' AS STRING) AS p_include_job_id\n",
+        "),\n",
+        "jobs_latest AS (\n",
+        "  SELECT\n",
+        "    workspace_id,\n",
+        "    CAST(job_id AS STRING) AS job_id,\n",
+        "    name AS job_name,\n",
+        "    change_time,\n",
+        "    ROW_NUMBER() OVER (\n",
+        "      PARTITION BY workspace_id, CAST(job_id AS STRING)\n",
+        "      ORDER BY change_time DESC\n",
+        "    ) AS rn\n",
+        "  FROM system.lakeflow.jobs\n",
+        "),\n",
+        "target_jobs AS (\n",
+        "  SELECT\n",
+        "    j.workspace_id,\n",
+        "    j.job_id,\n",
+        "    j.job_name\n",
+        "  FROM jobs_latest j\n",
+        "  CROSS JOIN params p\n",
+        "  WHERE j.rn = 1\n",
+        "    AND (\n",
+        "      lower(COALESCE(j.job_name, '')) LIKE concat('%', p.p_job_keyword, '%')\n",
+        "      OR j.job_id = p.p_include_job_id\n",
+        "    )\n",
+        "),\n",
+        "timeline_scoped AS (\n",
+        "  SELECT\n",
+        "    t.workspace_id,\n",
+        "    CAST(t.job_id AS STRING) AS job_id,\n",
+        "    CAST(t.run_id AS STRING) AS run_id,\n",
+        "    t.run_name,\n",
+        "    t.trigger_type,\n",
+        "    t.run_type,\n",
+        "    t.result_state,\n",
+        "    t.termination_code,\n",
+        "    t.period_start_time,\n",
+        "    t.period_end_time\n",
+        "  FROM system.lakeflow.job_run_timeline t\n",
+        "  INNER JOIN target_jobs j\n",
+        "    ON t.workspace_id = j.workspace_id\n",
+        "   AND CAST(t.job_id AS STRING) = j.job_id\n",
+        "  CROSS JOIN params p\n",
+        "  WHERE t.period_start_time >= timestampadd(DAY, -p.p_window_days, current_timestamp())\n",
+        "),\n",
+        "run_rollup AS (\n",
+        "  SELECT\n",
+        "    workspace_id,\n",
+        "    job_id,\n",
+        "    run_id,\n",
+        "    MAX(run_name) AS run_name,\n",
+        "    MAX(trigger_type) AS trigger_type,\n",
+        "    MAX(run_type) AS run_type,\n",
+        "    MAX(result_state) AS result_state,\n",
+        "    MAX(termination_code) AS termination_code,\n",
+        "    MIN(period_start_time) AS run_start_time_utc,\n",
+        "    MAX(period_end_time) AS run_end_time_utc,\n",
+        "    SUM(unix_timestamp(period_end_time) - unix_timestamp(period_start_time)) AS run_duration_seconds\n",
+        "  FROM timeline_scoped\n",
+        "  GROUP BY workspace_id, job_id, run_id\n",
+        "),\n",
+        "ranked AS (\n",
+        "  SELECT\n",
+        "    r.workspace_id,\n",
+        "    r.job_id,\n",
+        "    j.job_name,\n",
+        "    r.run_id,\n",
+        "    r.run_name,\n",
+        "    r.trigger_type,\n",
+        "    r.run_type,\n",
+        "    r.result_state,\n",
+        "    r.termination_code,\n",
+        "    r.run_start_time_utc,\n",
+        "    r.run_end_time_utc,\n",
+        "    r.run_duration_seconds,\n",
+        "    ROW_NUMBER() OVER (ORDER BY r.run_end_time_utc DESC, r.run_id DESC) AS rn\n",
+        "  FROM run_rollup r\n",
+        "  LEFT JOIN target_jobs j\n",
+        "    ON r.workspace_id = j.workspace_id\n",
+        "   AND r.job_id = j.job_id\n",
+        "  WHERE r.result_state IS NOT NULL\n",
+        "),\n",
+        "top1 AS (\n",
+        "  SELECT *\n",
+        "  FROM ranked\n",
+        "  WHERE rn = 1\n",
+        ")\n",
+        "SELECT\n",
+        "  COALESCE(t.workspace_id, 'N/A') AS workspace_id,\n",
+        "  COALESCE(t.job_id, 'N/A') AS job_id,\n",
+        "  COALESCE(t.job_name, 'N/A') AS job_name,\n",
+        "  COALESCE(t.run_id, 'N/A') AS run_id,\n",
+        "  COALESCE(t.run_name, 'N/A') AS run_name,\n",
+        "  COALESCE(t.latest_result_state, t.result_state, 'NO_DATA') AS latest_result_state,\n",
+        "  t.trigger_type,\n",
+        "  t.run_type,\n",
+        "  t.termination_code,\n",
+        "  t.run_duration_seconds,\n",
+        "  t.run_start_time_utc,\n",
+        "  from_utc_timestamp(t.run_start_time_utc, 'Asia/Seoul') AS run_start_time_kst,\n",
+        "  t.run_end_time_utc AS latest_time_utc,\n",
+        "  from_utc_timestamp(t.run_end_time_utc, 'Asia/Seoul') AS latest_time_kst,\n",
+        "  current_timestamp() AS generated_at_utc,\n",
+        "  from_utc_timestamp(current_timestamp(), 'Asia/Seoul') AS generated_at_kst\n",
+        "FROM (SELECT 1 AS keep_one_row) s\n",
+        "LEFT JOIN (\n",
+        "  SELECT\n",
+        "    workspace_id,\n",
+        "    job_id,\n",
+        "    job_name,\n",
+        "    run_id,\n",
+        "    run_name,\n",
+        "    result_state,\n",
+        "    trigger_type,\n",
+        "    run_type,\n",
+        "    termination_code,\n",
+        "    run_duration_seconds,\n",
+        "    run_start_time_utc,\n",
+        "    run_end_time_utc,\n",
+        "    result_state AS latest_result_state\n",
+        "  FROM top1\n",
+        ") t\n",
+        "  ON TRUE;"
+      ]
+    },
+    {
+      "name": "ds_cwe_job_latest_by_job",
+      "displayName": "CWE Job Latest By Job",
+      "queryLines": [
+        "WITH params AS (\n",
+        "  SELECT\n",
+        "    30 AS p_window_days,\n",
+        "    lower('cwe') AS p_job_keyword,\n",
+        "    CAST('1001' AS STRING) AS p_include_job_id\n",
+        "),\n",
+        "jobs_latest AS (\n",
+        "  SELECT\n",
+        "    workspace_id,\n",
+        "    CAST(job_id AS STRING) AS job_id,\n",
+        "    name AS job_name,\n",
+        "    change_time,\n",
+        "    ROW_NUMBER() OVER (\n",
+        "      PARTITION BY workspace_id, CAST(job_id AS STRING)\n",
+        "      ORDER BY change_time DESC\n",
+        "    ) AS rn\n",
+        "  FROM system.lakeflow.jobs\n",
+        "),\n",
+        "target_jobs AS (\n",
+        "  SELECT\n",
+        "    j.workspace_id,\n",
+        "    j.job_id,\n",
+        "    j.job_name\n",
+        "  FROM jobs_latest j\n",
+        "  CROSS JOIN params p\n",
+        "  WHERE j.rn = 1\n",
+        "    AND (\n",
+        "      lower(COALESCE(j.job_name, '')) LIKE concat('%', p.p_job_keyword, '%')\n",
+        "      OR j.job_id = p.p_include_job_id\n",
+        "    )\n",
+        "),\n",
+        "timeline_scoped AS (\n",
+        "  SELECT\n",
+        "    t.workspace_id,\n",
+        "    CAST(t.job_id AS STRING) AS job_id,\n",
+        "    CAST(t.run_id AS STRING) AS run_id,\n",
+        "    t.run_name,\n",
+        "    t.trigger_type,\n",
+        "    t.run_type,\n",
+        "    t.result_state,\n",
+        "    t.termination_code,\n",
+        "    t.period_start_time,\n",
+        "    t.period_end_time\n",
+        "  FROM system.lakeflow.job_run_timeline t\n",
+        "  INNER JOIN target_jobs j\n",
+        "    ON t.workspace_id = j.workspace_id\n",
+        "   AND CAST(t.job_id AS STRING) = j.job_id\n",
+        "  CROSS JOIN params p\n",
+        "  WHERE t.period_start_time >= timestampadd(DAY, -p.p_window_days, current_timestamp())\n",
+        "),\n",
+        "run_rollup AS (\n",
+        "  SELECT\n",
+        "    workspace_id,\n",
+        "    job_id,\n",
+        "    run_id,\n",
+        "    MAX(run_name) AS run_name,\n",
+        "    MAX(trigger_type) AS trigger_type,\n",
+        "    MAX(run_type) AS run_type,\n",
+        "    MAX(result_state) AS result_state,\n",
+        "    MAX(termination_code) AS termination_code,\n",
+        "    MIN(period_start_time) AS run_start_time_utc,\n",
+        "    MAX(period_end_time) AS run_end_time_utc,\n",
+        "    SUM(unix_timestamp(period_end_time) - unix_timestamp(period_start_time)) AS run_duration_seconds\n",
+        "  FROM timeline_scoped\n",
+        "  GROUP BY workspace_id, job_id, run_id\n",
+        "),\n",
+        "ranked AS (\n",
+        "  SELECT\n",
+        "    r.workspace_id,\n",
+        "    r.job_id,\n",
+        "    j.job_name,\n",
+        "    r.run_id,\n",
+        "    r.run_name,\n",
+        "    r.trigger_type,\n",
+        "    r.run_type,\n",
+        "    r.result_state,\n",
+        "    r.termination_code,\n",
+        "    r.run_start_time_utc,\n",
+        "    r.run_end_time_utc,\n",
+        "    r.run_duration_seconds,\n",
+        "    ROW_NUMBER() OVER (\n",
+        "      PARTITION BY r.workspace_id, r.job_id\n",
+        "      ORDER BY r.run_end_time_utc DESC, r.run_id DESC\n",
+        "    ) AS rn\n",
+        "  FROM run_rollup r\n",
+        "  LEFT JOIN target_jobs j\n",
+        "    ON r.workspace_id = j.workspace_id\n",
+        "   AND r.job_id = j.job_id\n",
+        "  WHERE r.result_state IS NOT NULL\n",
+        ")\n",
+        "SELECT\n",
+        "  workspace_id,\n",
+        "  job_id,\n",
+        "  COALESCE(job_name, 'N/A') AS job_name,\n",
+        "  run_id,\n",
+        "  run_name,\n",
+        "  result_state AS latest_result_state,\n",
+        "  trigger_type,\n",
+        "  run_type,\n",
+        "  termination_code,\n",
+        "  run_duration_seconds,\n",
+        "  run_start_time_utc,\n",
+        "  from_utc_timestamp(run_start_time_utc, 'Asia/Seoul') AS run_start_time_kst,\n",
+        "  run_end_time_utc AS latest_time_utc,\n",
+        "  from_utc_timestamp(run_end_time_utc, 'Asia/Seoul') AS latest_time_kst,\n",
+        "  current_timestamp() AS generated_at_utc,\n",
+        "  from_utc_timestamp(current_timestamp(), 'Asia/Seoul') AS generated_at_kst\n",
+        "FROM ranked\n",
+        "WHERE rn = 1\n",
+        "ORDER BY latest_time_utc DESC;"
+      ]
+    },
+    {
+      "name": "ds_ml_runs_30d",
+      "displayName": "ML Runs 30d",
+      "queryLines": [
+        "WITH params AS (\n",
+        "  SELECT 30 AS p_ml_window_days\n",
+        "),\n",
+        "runs_scoped AS (\n",
+        "  SELECT\n",
+        "    CAST(r.run_id AS STRING) AS run_id,\n",
+        "    CAST(r.workspace_id AS STRING) AS workspace_id,\n",
+        "    CAST(r.experiment_id AS STRING) AS experiment_id,\n",
+        "    r.run_name,\n",
+        "    r.status,\n",
+        "    r.created_by,\n",
+        "    r.start_time AS run_start_time_utc,\n",
+        "    r.end_time AS run_end_time_utc\n",
+        "  FROM system.mlflow.runs_latest r\n",
+        "  CROSS JOIN params p\n",
+        "  WHERE r.delete_time IS NULL\n",
+        "    AND r.start_time >= timestampadd(DAY, -p.p_ml_window_days, current_timestamp())\n",
+        "),\n",
+        "metrics_scoped AS (\n",
+        "  SELECT\n",
+        "    CAST(h.run_id AS STRING) AS run_id,\n",
+        "    lower(h.metric_name) AS metric_name_lc,\n",
+        "    CAST(h.metric_value AS DOUBLE) AS metric_value,\n",
+        "    h.metric_time,\n",
+        "    h.metric_step\n",
+        "  FROM system.mlflow.run_metrics_history h\n",
+        "  CROSS JOIN params p\n",
+        "  INNER JOIN runs_scoped r\n",
+        "    ON CAST(h.run_id AS STRING) = r.run_id\n",
+        "  WHERE h.metric_time >= timestampadd(DAY, -p.p_ml_window_days, current_timestamp())\n",
+        "),\n",
+        "metric_classified AS (\n",
+        "  SELECT\n",
+        "    run_id,\n",
+        "    metric_name_lc,\n",
+        "    metric_value,\n",
+        "    metric_time,\n",
+        "    metric_step,\n",
+        "    CASE\n",
+        "      WHEN metric_name_lc = 'training_score' THEN 'train_score'\n",
+        "      WHEN metric_name_lc = 'val_score' THEN 'val_score'\n",
+        "      WHEN metric_name_lc = 'test_score' THEN 'test_score'\n",
+        "\n",
+        "      WHEN metric_name_lc IN ('training_r2_score', 'r2_score_x_train') THEN 'train_r2'\n",
+        "      WHEN metric_name_lc IN ('val_r2_score', 'r2_score_x_val') THEN 'val_r2'\n",
+        "      WHEN metric_name_lc IN ('test_r2_score', 'r2_score_x_test') THEN 'test_r2'\n",
+        "\n",
+        "      WHEN metric_name_lc = 'training_root_mean_squared_error' THEN 'train_rmse'\n",
+        "      WHEN metric_name_lc = 'val_root_mean_squared_error' THEN 'val_rmse'\n",
+        "      WHEN metric_name_lc = 'test_root_mean_squared_error' THEN 'test_rmse'\n",
+        "\n",
+        "      WHEN metric_name_lc IN ('training_mean_squared_error', 'mean_squared_error_x_train') THEN 'train_mse'\n",
+        "      WHEN metric_name_lc IN ('val_mean_squared_error', 'mean_squared_error_x_val') THEN 'val_mse'\n",
+        "      WHEN metric_name_lc IN ('test_mean_squared_error', 'mean_squared_error_x_test') THEN 'test_mse'\n",
+        "\n",
+        "      WHEN metric_name_lc = 'training_mean_absolute_error' THEN 'train_mae'\n",
+        "      WHEN metric_name_lc = 'val_mean_absolute_error' THEN 'val_mae'\n",
+        "      WHEN metric_name_lc = 'test_mean_absolute_error' THEN 'test_mae'\n",
+        "      ELSE NULL\n",
+        "    END AS metric_bucket\n",
+        "  FROM metrics_scoped\n",
+        "),\n",
+        "metric_latest_ranked AS (\n",
+        "  SELECT\n",
+        "    run_id,\n",
+        "    metric_bucket,\n",
+        "    metric_value,\n",
+        "    ROW_NUMBER() OVER (\n",
+        "      PARTITION BY run_id, metric_bucket\n",
+        "      ORDER BY metric_time DESC, metric_step DESC, metric_value DESC\n",
+        "    ) AS rn\n",
+        "  FROM metric_classified\n",
+        "  WHERE metric_bucket IS NOT NULL\n",
+        "),\n",
+        "metric_latest AS (\n",
+        "  SELECT\n",
+        "    run_id,\n",
+        "    MAX(CASE WHEN metric_bucket = 'train_score' THEN metric_value END) AS training_score_latest,\n",
+        "    MAX(CASE WHEN metric_bucket = 'val_score' THEN metric_value END) AS val_score_latest,\n",
+        "    MAX(CASE WHEN metric_bucket = 'test_score' THEN metric_value END) AS test_score_latest,\n",
+        "\n",
+        "    MAX(CASE WHEN metric_bucket = 'train_r2' THEN metric_value END) AS training_r2_latest,\n",
+        "    MAX(CASE WHEN metric_bucket = 'val_r2' THEN metric_value END) AS val_r2_latest,\n",
+        "    MAX(CASE WHEN metric_bucket = 'test_r2' THEN metric_value END) AS test_r2_latest,\n",
+        "\n",
+        "    MAX(CASE WHEN metric_bucket = 'train_rmse' THEN metric_value END) AS training_rmse_latest,\n",
+        "    MAX(CASE WHEN metric_bucket = 'val_rmse' THEN metric_value END) AS val_rmse_latest,\n",
+        "    MAX(CASE WHEN metric_bucket = 'test_rmse' THEN metric_value END) AS test_rmse_latest,\n",
+        "\n",
+        "    MAX(CASE WHEN metric_bucket = 'train_mse' THEN metric_value END) AS training_mse_latest,\n",
+        "    MAX(CASE WHEN metric_bucket = 'val_mse' THEN metric_value END) AS val_mse_latest,\n",
+        "    MAX(CASE WHEN metric_bucket = 'test_mse' THEN metric_value END) AS test_mse_latest,\n",
+        "\n",
+        "    MAX(CASE WHEN metric_bucket = 'train_mae' THEN metric_value END) AS training_mae_latest,\n",
+        "    MAX(CASE WHEN metric_bucket = 'val_mae' THEN metric_value END) AS val_mae_latest,\n",
+        "    MAX(CASE WHEN metric_bucket = 'test_mae' THEN metric_value END) AS test_mae_latest\n",
+        "  FROM metric_latest_ranked\n",
+        "  WHERE rn = 1\n",
+        "  GROUP BY run_id\n",
+        "),\n",
+        "metric_best AS (\n",
+        "  SELECT\n",
+        "    run_id,\n",
+        "    MAX(CASE WHEN metric_bucket = 'train_score' THEN metric_value END) AS training_score_max,\n",
+        "    MAX(CASE WHEN metric_bucket = 'val_score' THEN metric_value END) AS val_score_max,\n",
+        "    MAX(CASE WHEN metric_bucket = 'test_score' THEN metric_value END) AS test_score_max,\n",
+        "\n",
+        "    MAX(CASE WHEN metric_bucket = 'train_r2' THEN metric_value END) AS training_r2_max,\n",
+        "    MAX(CASE WHEN metric_bucket = 'val_r2' THEN metric_value END) AS val_r2_max,\n",
+        "    MAX(CASE WHEN metric_bucket = 'test_r2' THEN metric_value END) AS test_r2_max,\n",
+        "\n",
+        "    MIN(CASE WHEN metric_bucket = 'train_rmse' THEN metric_value END) AS training_rmse_min,\n",
+        "    MIN(CASE WHEN metric_bucket = 'val_rmse' THEN metric_value END) AS val_rmse_min,\n",
+        "    MIN(CASE WHEN metric_bucket = 'test_rmse' THEN metric_value END) AS test_rmse_min,\n",
+        "\n",
+        "    MIN(CASE WHEN metric_bucket = 'train_mse' THEN metric_value END) AS training_mse_min,\n",
+        "    MIN(CASE WHEN metric_bucket = 'val_mse' THEN metric_value END) AS val_mse_min,\n",
+        "    MIN(CASE WHEN metric_bucket = 'test_mse' THEN metric_value END) AS test_mse_min,\n",
+        "\n",
+        "    MIN(CASE WHEN metric_bucket = 'train_mae' THEN metric_value END) AS training_mae_min,\n",
+        "    MIN(CASE WHEN metric_bucket = 'val_mae' THEN metric_value END) AS val_mae_min,\n",
+        "    MIN(CASE WHEN metric_bucket = 'test_mae' THEN metric_value END) AS test_mae_min\n",
+        "  FROM metric_classified\n",
+        "  WHERE metric_bucket IS NOT NULL\n",
+        "  GROUP BY run_id\n",
+        "),\n",
+        "training_metric_candidates AS (\n",
+        "  SELECT\n",
+        "    run_id,\n",
+        "    metric_name_lc AS training_data_count_key,\n",
+        "    metric_value AS training_data_count,\n",
+        "    metric_time AS training_data_count_observed_at_utc,\n",
+        "    CASE\n",
+        "      WHEN metric_name_lc IN (\n",
+        "        'training_example_count',\n",
+        "        'train_example_count',\n",
+        "        'training_sample_count',\n",
+        "        'train_sample_count',\n",
+        "        'training_row_count',\n",
+        "        'train_row_count',\n",
+        "        'training_rows',\n",
+        "        'train_rows',\n",
+        "        'training_records',\n",
+        "        'train_records',\n",
+        "        'dataset_row_count',\n",
+        "        'dataset_rows',\n",
+        "        'dataset_record_count',\n",
+        "        'dataset_size',\n",
+        "        'num_train_rows',\n",
+        "        'num_train_samples',\n",
+        "        'n_train',\n",
+        "        'train_size',\n",
+        "        'training_size'\n",
+        "      ) THEN 220\n",
+        "      WHEN metric_name_lc RLIKE '(train|training).*(count|rows?|samples?|examples?|records?|size|num)' THEN 180\n",
+        "      WHEN metric_name_lc RLIKE '(count|rows?|samples?|examples?|records?|size|num).*(train|training)' THEN 170\n",
+        "      WHEN metric_name_lc RLIKE '(dataset).*(count|rows?|samples?|examples?|records?|size|num)' THEN 150\n",
+        "      WHEN metric_name_lc RLIKE '(count|rows?|samples?|examples?|records?|size|num).*(dataset)' THEN 140\n",
+        "      ELSE NULL\n",
+        "    END AS candidate_score\n",
+        "  FROM metrics_scoped\n",
+        "  WHERE metric_value IS NOT NULL\n",
+        "    AND NOT isnan(metric_value)\n",
+        "    AND metric_value > 0\n",
+        "    AND metric_value < 1000000000000000\n",
+        "    AND metric_name_lc RLIKE '(count|rows?|samples?|examples?|records?|size|num)'\n",
+        "    AND metric_name_lc RLIKE '(train|training|dataset)'\n",
+        "    AND metric_name_lc NOT RLIKE '(score|r2|rmse|mse|mae|error|loss|auc|precision|recall|f1|mape|on_target)'\n",
+        "),\n",
+        "training_metric_best AS (\n",
+        "  SELECT\n",
+        "    run_id,\n",
+        "    training_data_count,\n",
+        "    training_data_count_key,\n",
+        "    training_data_count_observed_at_utc\n",
+        "  FROM (\n",
+        "    SELECT\n",
+        "      run_id,\n",
+        "      training_data_count,\n",
+        "      training_data_count_key,\n",
+        "      training_data_count_observed_at_utc,\n",
+        "      candidate_score,\n",
+        "      ROW_NUMBER() OVER (\n",
+        "        PARTITION BY run_id\n",
+        "        ORDER BY candidate_score DESC, training_data_count_observed_at_utc DESC, training_data_count DESC\n",
+        "      ) AS rn\n",
+        "    FROM training_metric_candidates\n",
+        "    WHERE training_data_count IS NOT NULL\n",
+        "      AND candidate_score IS NOT NULL\n",
+        "  ) ranked\n",
+        "  WHERE rn = 1\n",
+        "),\n",
+        "metric_key_profile AS (\n",
+        "  SELECT\n",
+        "    run_id,\n",
+        "    concat_ws(', ', slice(array_sort(collect_set(metric_name_lc)), 1, 50)) AS metric_keys_detected\n",
+        "  FROM metrics_scoped\n",
+        "  GROUP BY run_id\n",
+        ")\n",
+        "SELECT\n",
+        "  r.workspace_id,\n",
+        "  r.experiment_id,\n",
+        "  r.run_id,\n",
+        "  r.run_name,\n",
+        "  r.status,\n",
+        "  r.created_by,\n",
+        "  r.run_start_time_utc,\n",
+        "  from_utc_timestamp(r.run_start_time_utc, 'Asia/Seoul') AS run_start_time_kst,\n",
+        "  r.run_end_time_utc,\n",
+        "  from_utc_timestamp(r.run_end_time_utc, 'Asia/Seoul') AS run_end_time_kst,\n",
+        "  CASE\n",
+        "    WHEN r.run_end_time_utc IS NOT NULL AND r.run_start_time_utc IS NOT NULL\n",
+        "    THEN unix_timestamp(r.run_end_time_utc) - unix_timestamp(r.run_start_time_utc)\n",
+        "    ELSE NULL\n",
+        "  END AS run_duration_seconds,\n",
+        "\n",
+        "  ml.training_score_latest,\n",
+        "  mb.training_score_max,\n",
+        "  ml.val_score_latest,\n",
+        "  mb.val_score_max,\n",
+        "  ml.test_score_latest,\n",
+        "  mb.test_score_max,\n",
+        "\n",
+        "  ml.training_r2_latest,\n",
+        "  mb.training_r2_max,\n",
+        "  ml.val_r2_latest,\n",
+        "  mb.val_r2_max,\n",
+        "  ml.test_r2_latest,\n",
+        "  mb.test_r2_max,\n",
+        "\n",
+        "  ml.training_rmse_latest,\n",
+        "  mb.training_rmse_min,\n",
+        "  ml.val_rmse_latest,\n",
+        "  mb.val_rmse_min,\n",
+        "  ml.test_rmse_latest,\n",
+        "  mb.test_rmse_min,\n",
+        "\n",
+        "  ml.training_mse_latest,\n",
+        "  mb.training_mse_min,\n",
+        "  ml.val_mse_latest,\n",
+        "  mb.val_mse_min,\n",
+        "  ml.test_mse_latest,\n",
+        "  mb.test_mse_min,\n",
+        "\n",
+        "  ml.training_mae_latest,\n",
+        "  mb.training_mae_min,\n",
+        "  ml.val_mae_latest,\n",
+        "  mb.val_mae_min,\n",
+        "  ml.test_mae_latest,\n",
+        "  mb.test_mae_min,\n",
+        "\n",
+        "  'regression' AS model_family,\n",
+        "  CASE\n",
+        "    WHEN ml.test_r2_latest IS NOT NULL THEN 'test_r2_score'\n",
+        "    WHEN ml.val_r2_latest IS NOT NULL THEN 'val_r2_score'\n",
+        "    WHEN ml.training_r2_latest IS NOT NULL THEN 'training_r2_score'\n",
+        "    WHEN ml.test_score_latest IS NOT NULL THEN 'test_score'\n",
+        "    WHEN ml.val_score_latest IS NOT NULL THEN 'val_score'\n",
+        "    WHEN ml.training_score_latest IS NOT NULL THEN 'training_score'\n",
+        "    WHEN ml.test_rmse_latest IS NOT NULL THEN 'test_root_mean_squared_error'\n",
+        "    WHEN ml.val_rmse_latest IS NOT NULL THEN 'val_root_mean_squared_error'\n",
+        "    WHEN ml.training_rmse_latest IS NOT NULL THEN 'training_root_mean_squared_error'\n",
+        "    ELSE NULL\n",
+        "  END AS primary_metric_name,\n",
+        "  COALESCE(\n",
+        "    ml.test_r2_latest,\n",
+        "    ml.val_r2_latest,\n",
+        "    ml.training_r2_latest,\n",
+        "    ml.test_score_latest,\n",
+        "    ml.val_score_latest,\n",
+        "    ml.training_score_latest,\n",
+        "    ml.test_rmse_latest,\n",
+        "    ml.val_rmse_latest,\n",
+        "    ml.training_rmse_latest\n",
+        "  ) AS primary_metric_latest,\n",
+        "\n",
+        "  tb.training_data_count,\n",
+        "  CASE\n",
+        "    WHEN tb.training_data_count IS NOT NULL THEN 'metrics_history'\n",
+        "    ELSE 'not_found'\n",
+        "  END AS training_data_count_source,\n",
+        "  tb.training_data_count_key,\n",
+        "  tb.training_data_count_observed_at_utc,\n",
+        "  from_utc_timestamp(tb.training_data_count_observed_at_utc, 'Asia/Seoul') AS training_data_count_observed_at_kst,\n",
+        "\n",
+        "  mkp.metric_keys_detected,\n",
+        "  current_timestamp() AS generated_at_utc,\n",
+        "  from_utc_timestamp(current_timestamp(), 'Asia/Seoul') AS generated_at_kst\n",
+        "FROM runs_scoped r\n",
+        "LEFT JOIN metric_latest ml\n",
+        "  ON r.run_id = ml.run_id\n",
+        "LEFT JOIN metric_best mb\n",
+        "  ON r.run_id = mb.run_id\n",
+        "LEFT JOIN training_metric_best tb\n",
+        "  ON r.run_id = tb.run_id\n",
+        "LEFT JOIN metric_key_profile mkp\n",
+        "  ON r.run_id = mkp.run_id\n",
+        "ORDER BY COALESCE(r.run_end_time_utc, r.run_start_time_utc) DESC, r.run_id DESC"
+      ]
+    },
+    {
+      "name": "ds_ml_training_data_count_30d",
+      "displayName": "ML Training Data Count 30d",
+      "queryLines": [
+        "WITH params AS (\n",
+        "  SELECT 30 AS p_ml_window_days\n",
+        "),\n",
+        "runs_scoped AS (\n",
+        "  SELECT\n",
+        "    CAST(r.run_id AS STRING) AS run_id,\n",
+        "    CAST(r.workspace_id AS STRING) AS workspace_id,\n",
+        "    CAST(r.experiment_id AS STRING) AS experiment_id,\n",
+        "    r.run_name,\n",
+        "    r.status,\n",
+        "    r.start_time AS run_start_time_utc,\n",
+        "    r.end_time AS run_end_time_utc\n",
+        "  FROM system.mlflow.runs_latest r\n",
+        "  CROSS JOIN params p\n",
+        "  WHERE r.delete_time IS NULL\n",
+        "    AND r.start_time >= timestampadd(DAY, -p.p_ml_window_days, current_timestamp())\n",
+        "),\n",
+        "metrics_scoped AS (\n",
+        "  SELECT\n",
+        "    CAST(h.run_id AS STRING) AS run_id,\n",
+        "    lower(h.metric_name) AS metric_name_lc,\n",
+        "    CAST(h.metric_value AS DOUBLE) AS metric_value,\n",
+        "    h.metric_time\n",
+        "  FROM system.mlflow.run_metrics_history h\n",
+        "  CROSS JOIN params p\n",
+        "  INNER JOIN runs_scoped r\n",
+        "    ON CAST(h.run_id AS STRING) = r.run_id\n",
+        "  WHERE h.metric_time >= timestampadd(DAY, -p.p_ml_window_days, current_timestamp())\n",
+        "),\n",
+        "training_metric_candidates AS (\n",
+        "  SELECT\n",
+        "    run_id,\n",
+        "    metric_name_lc AS training_data_count_key,\n",
+        "    metric_value AS training_data_count,\n",
+        "    metric_time AS training_data_count_observed_at_utc,\n",
+        "    CASE\n",
+        "      WHEN metric_name_lc IN (\n",
+        "        'training_example_count',\n",
+        "        'train_example_count',\n",
+        "        'training_sample_count',\n",
+        "        'train_sample_count',\n",
+        "        'training_row_count',\n",
+        "        'train_row_count',\n",
+        "        'training_rows',\n",
+        "        'train_rows',\n",
+        "        'training_records',\n",
+        "        'train_records',\n",
+        "        'dataset_row_count',\n",
+        "        'dataset_rows',\n",
+        "        'dataset_record_count',\n",
+        "        'dataset_size',\n",
+        "        'num_train_rows',\n",
+        "        'num_train_samples',\n",
+        "        'n_train',\n",
+        "        'train_size',\n",
+        "        'training_size'\n",
+        "      ) THEN 220\n",
+        "      WHEN metric_name_lc RLIKE '(train|training).*(count|rows?|samples?|examples?|records?|size|num)' THEN 180\n",
+        "      WHEN metric_name_lc RLIKE '(count|rows?|samples?|examples?|records?|size|num).*(train|training)' THEN 170\n",
+        "      WHEN metric_name_lc RLIKE '(dataset).*(count|rows?|samples?|examples?|records?|size|num)' THEN 150\n",
+        "      WHEN metric_name_lc RLIKE '(count|rows?|samples?|examples?|records?|size|num).*(dataset)' THEN 140\n",
+        "      ELSE NULL\n",
+        "    END AS candidate_score\n",
+        "  FROM metrics_scoped\n",
+        "  WHERE metric_value IS NOT NULL\n",
+        "    AND NOT isnan(metric_value)\n",
+        "    AND metric_value > 0\n",
+        "    AND metric_value < 1000000000000000\n",
+        "    AND metric_name_lc RLIKE '(count|rows?|samples?|examples?|records?|size|num)'\n",
+        "    AND metric_name_lc RLIKE '(train|training|dataset)'\n",
+        "    AND metric_name_lc NOT RLIKE '(score|r2|rmse|mse|mae|error|loss|auc|precision|recall|f1|mape|on_target)'\n",
+        "),\n",
+        "training_metric_best AS (\n",
+        "  SELECT\n",
+        "    run_id,\n",
+        "    training_data_count,\n",
+        "    training_data_count_key,\n",
+        "    training_data_count_observed_at_utc\n",
+        "  FROM (\n",
+        "    SELECT\n",
+        "      run_id,\n",
+        "      training_data_count,\n",
+        "      training_data_count_key,\n",
+        "      training_data_count_observed_at_utc,\n",
+        "      candidate_score,\n",
+        "      ROW_NUMBER() OVER (\n",
+        "        PARTITION BY run_id\n",
+        "        ORDER BY candidate_score DESC, training_data_count_observed_at_utc DESC, training_data_count DESC\n",
+        "      ) AS rn\n",
+        "    FROM training_metric_candidates\n",
+        "    WHERE training_data_count IS NOT NULL\n",
+        "      AND candidate_score IS NOT NULL\n",
+        "  ) ranked\n",
+        "  WHERE rn = 1\n",
+        "),\n",
+        "runs_enriched AS (\n",
+        "  SELECT\n",
+        "    r.workspace_id,\n",
+        "    r.experiment_id,\n",
+        "    r.run_id,\n",
+        "    r.run_name,\n",
+        "    r.status,\n",
+        "    r.run_start_time_utc,\n",
+        "    r.run_end_time_utc,\n",
+        "    t.training_data_count,\n",
+        "    t.training_data_count_key,\n",
+        "    t.training_data_count_observed_at_utc\n",
+        "  FROM runs_scoped r\n",
+        "  LEFT JOIN training_metric_best t\n",
+        "    ON r.run_id = t.run_id\n",
+        "),\n",
+        "summary AS (\n",
+        "  SELECT\n",
+        "    COUNT(*) AS total_runs_30d,\n",
+        "    SUM(CASE WHEN training_data_count IS NOT NULL THEN 1 ELSE 0 END) AS runs_with_training_data_count,\n",
+        "    MAX(training_data_count) AS max_training_data_count,\n",
+        "    MIN(training_data_count) AS min_training_data_count,\n",
+        "    ROUND(AVG(training_data_count), 2) AS avg_training_data_count\n",
+        "  FROM runs_enriched\n",
+        "),\n",
+        "latest_with_count AS (\n",
+        "  SELECT\n",
+        "    workspace_id,\n",
+        "    experiment_id,\n",
+        "    run_id,\n",
+        "    run_name,\n",
+        "    status,\n",
+        "    training_data_count,\n",
+        "    training_data_count_key,\n",
+        "    run_start_time_utc,\n",
+        "    run_end_time_utc,\n",
+        "    training_data_count_observed_at_utc\n",
+        "  FROM (\n",
+        "    SELECT\n",
+        "      workspace_id,\n",
+        "      experiment_id,\n",
+        "      run_id,\n",
+        "      run_name,\n",
+        "      status,\n",
+        "      training_data_count,\n",
+        "      training_data_count_key,\n",
+        "      run_start_time_utc,\n",
+        "      run_end_time_utc,\n",
+        "      training_data_count_observed_at_utc,\n",
+        "      ROW_NUMBER() OVER (\n",
+        "        ORDER BY COALESCE(run_end_time_utc, run_start_time_utc) DESC, run_id DESC\n",
+        "      ) AS rn\n",
+        "    FROM runs_enriched\n",
+        "    WHERE training_data_count IS NOT NULL\n",
+        "  ) ranked\n",
+        "  WHERE rn = 1\n",
+        "),\n",
+        "metric_key_profile AS (\n",
+        "  SELECT\n",
+        "    concat_ws(', ', slice(array_sort(collect_set(training_data_count_key)), 1, 50)) AS metric_like_keys_30d\n",
+        "  FROM training_metric_candidates\n",
+        ")\n",
+        "SELECT\n",
+        "  s.total_runs_30d,\n",
+        "  s.runs_with_training_data_count,\n",
+        "  s.max_training_data_count,\n",
+        "  s.min_training_data_count,\n",
+        "  s.avg_training_data_count,\n",
+        "  l.workspace_id AS latest_workspace_id,\n",
+        "  l.experiment_id AS latest_experiment_id,\n",
+        "  l.run_id AS latest_run_id,\n",
+        "  l.run_name AS latest_run_name,\n",
+        "  l.status AS latest_run_status,\n",
+        "  l.training_data_count AS latest_training_data_count,\n",
+        "  l.training_data_count_key AS latest_training_data_key,\n",
+        "  l.run_start_time_utc AS latest_run_start_time_utc,\n",
+        "  from_utc_timestamp(l.run_start_time_utc, 'Asia/Seoul') AS latest_run_start_time_kst,\n",
+        "  l.run_end_time_utc AS latest_run_end_time_utc,\n",
+        "  from_utc_timestamp(l.run_end_time_utc, 'Asia/Seoul') AS latest_run_end_time_kst,\n",
+        "  l.training_data_count_observed_at_utc AS latest_metric_time_utc,\n",
+        "  from_utc_timestamp(l.training_data_count_observed_at_utc, 'Asia/Seoul') AS latest_metric_time_kst,\n",
+        "  mkp.metric_like_keys_30d,\n",
+        "  current_timestamp() AS generated_at_utc,\n",
+        "  from_utc_timestamp(current_timestamp(), 'Asia/Seoul') AS generated_at_kst\n",
+        "FROM summary s\n",
+        "LEFT JOIN latest_with_count l ON TRUE\n",
+        "LEFT JOIN metric_key_profile mkp ON TRUE"
+      ]
+    },
+    {
+      "name": "ds_compute_workspace_status_30d",
+      "displayName": "Compute Workspace Status 30d",
+      "queryLines": [
+        "WITH params AS (\n",
+        "  SELECT 30 AS p_window_days\n",
+        "),\n",
+        "clusters_latest AS (\n",
+        "  SELECT\n",
+        "    workspace_id,\n",
+        "    cluster_id,\n",
+        "    cluster_name,\n",
+        "    cluster_source,\n",
+        "    change_time,\n",
+        "    delete_time,\n",
+        "    ROW_NUMBER() OVER (\n",
+        "      PARTITION BY workspace_id, cluster_id\n",
+        "      ORDER BY change_time DESC\n",
+        "    ) AS rn\n",
+        "  FROM system.compute.clusters\n",
+        "),\n",
+        "clusters_current AS (\n",
+        "  SELECT\n",
+        "    workspace_id,\n",
+        "    cluster_id,\n",
+        "    cluster_name,\n",
+        "    cluster_source,\n",
+        "    delete_time\n",
+        "  FROM clusters_latest\n",
+        "  WHERE rn = 1\n",
+        "),\n",
+        "cluster_counts AS (\n",
+        "  SELECT\n",
+        "    COUNT(*) AS clusters_known,\n",
+        "    SUM(CASE WHEN delete_time IS NULL THEN 1 ELSE 0 END) AS clusters_not_deleted,\n",
+        "    SUM(\n",
+        "      CASE\n",
+        "        WHEN delete_time IS NULL AND upper(COALESCE(cluster_source, '')) = 'JOB'\n",
+        "        THEN 1\n",
+        "        ELSE 0\n",
+        "      END\n",
+        "    ) AS job_clusters_not_deleted\n",
+        "  FROM clusters_current\n",
+        "),\n",
+        "node_30d AS (\n",
+        "  SELECT\n",
+        "    COUNT(DISTINCT cluster_id) AS active_clusters_30d,\n",
+        "    COUNT(DISTINCT instance_id) AS active_instances_30d,\n",
+        "    ROUND(AVG(cpu_user_percent), 2) AS avg_cpu_user_percent_30d,\n",
+        "    ROUND(AVG(mem_used_percent), 2) AS avg_mem_used_percent_30d,\n",
+        "    ROUND(SUM(network_sent_bytes) / POW(1024, 3), 3) AS network_sent_gb_30d,\n",
+        "    ROUND(SUM(network_received_bytes) / POW(1024, 3), 3) AS network_received_gb_30d,\n",
+        "    MAX(end_time) AS last_observed_utc\n",
+        "  FROM system.compute.node_timeline n\n",
+        "  CROSS JOIN params p\n",
+        "  WHERE n.start_time >= timestampadd(DAY, -p.p_window_days, current_timestamp())\n",
+        "),\n",
+        "node_last_hour AS (\n",
+        "  SELECT\n",
+        "    COUNT(DISTINCT cluster_id) AS active_clusters_last_hour,\n",
+        "    COUNT(DISTINCT instance_id) AS active_instances_last_hour\n",
+        "  FROM system.compute.node_timeline\n",
+        "  WHERE end_time >= timestampadd(HOUR, -1, current_timestamp())\n",
+        ")\n",
+        "SELECT\n",
+        "  c.clusters_known,\n",
+        "  c.clusters_not_deleted,\n",
+        "  c.job_clusters_not_deleted,\n",
+        "  n.active_clusters_30d,\n",
+        "  n.active_instances_30d,\n",
+        "  h.active_clusters_last_hour,\n",
+        "  h.active_instances_last_hour,\n",
+        "  n.avg_cpu_user_percent_30d,\n",
+        "  n.avg_mem_used_percent_30d,\n",
+        "  n.network_sent_gb_30d,\n",
+        "  n.network_received_gb_30d,\n",
+        "  n.last_observed_utc,\n",
+        "  from_utc_timestamp(n.last_observed_utc, 'Asia/Seoul') AS last_observed_kst,\n",
+        "  CASE\n",
+        "    WHEN n.last_observed_utc IS NULL THEN 'NO_DATA'\n",
+        "    WHEN n.last_observed_utc < timestampadd(HOUR, -2, current_timestamp()) THEN 'STALE'\n",
+        "    ELSE 'HEALTHY'\n",
+        "  END AS telemetry_freshness,\n",
+        "  current_timestamp() AS generated_at_utc,\n",
+        "  from_utc_timestamp(current_timestamp(), 'Asia/Seoul') AS generated_at_kst\n",
+        "FROM cluster_counts c\n",
+        "CROSS JOIN node_30d n\n",
+        "CROSS JOIN node_last_hour h;"
+      ]
+    },
+    {
+      "name": "ds_cost_daily_30d",
+      "displayName": "Cost Daily 30d",
+      "queryLines": [
+        "WITH params AS (\n",
+        "  SELECT\n",
+        "    30 AS p_window_days,\n",
+        "    CAST('7405606764056809' AS STRING) AS p_workspace_id,\n",
+        "    'azure-databricks-3dt-2nd-5th' AS p_workspace_name,\n",
+        "    'https://adb-7405606764056809.9.azuredatabricks.net' AS p_workspace_url\n",
+        "),\n",
+        "usage_scoped AS (\n",
+        "  SELECT\n",
+        "    u.usage_date,\n",
+        "    u.usage_start_time,\n",
+        "    u.usage_end_time,\n",
+        "    CAST(u.workspace_id AS STRING) AS workspace_id,\n",
+        "    u.sku_name,\n",
+        "    u.cloud,\n",
+        "    u.usage_unit,\n",
+        "    u.usage_quantity,\n",
+        "    u.billing_origin_product,\n",
+        "    p.p_workspace_name AS workspace_name,\n",
+        "    p.p_workspace_url AS workspace_url\n",
+        "  FROM system.billing.usage u\n",
+        "  CROSS JOIN params p\n",
+        "  WHERE CAST(u.workspace_id AS STRING) = p.p_workspace_id\n",
+        "    AND u.usage_date >= date_sub(current_date(), p.p_window_days)\n",
+        "),\n",
+        "usage_with_prices AS (\n",
+        "  SELECT\n",
+        "    u.usage_date,\n",
+        "    u.usage_start_time,\n",
+        "    u.usage_end_time,\n",
+        "    u.workspace_id,\n",
+        "    u.sku_name,\n",
+        "    u.cloud,\n",
+        "    u.usage_unit,\n",
+        "    CAST(u.usage_quantity AS DOUBLE) AS usage_quantity,\n",
+        "    u.billing_origin_product,\n",
+        "    u.workspace_name,\n",
+        "    u.workspace_url,\n",
+        "    CAST(COALESCE(lp.pricing.effective_list.default, lp.pricing.default) AS DOUBLE) AS unit_list_price,\n",
+        "    COALESCE(lp.currency_code, 'USD') AS currency_code\n",
+        "  FROM usage_scoped u\n",
+        "  LEFT JOIN system.billing.list_prices lp\n",
+        "    ON u.cloud = lp.cloud\n",
+        "   AND u.sku_name = lp.sku_name\n",
+        "   AND u.usage_unit = lp.usage_unit\n",
+        "   AND u.usage_end_time >= lp.price_start_time\n",
+        "   AND (lp.price_end_time IS NULL OR u.usage_end_time < lp.price_end_time)\n",
+        "),\n",
+        "daily_cost AS (\n",
+        "  SELECT\n",
+        "    workspace_id,\n",
+        "    workspace_name,\n",
+        "    workspace_url,\n",
+        "    usage_date AS usage_date_utc,\n",
+        "    date(from_utc_timestamp(CAST(usage_date AS TIMESTAMP), 'Asia/Seoul')) AS usage_date_kst,\n",
+        "    ROUND(SUM(usage_quantity * COALESCE(unit_list_price, 0.0)), 4) AS daily_cost_usd,\n",
+        "    ROUND(SUM(usage_quantity), 4) AS daily_usage_quantity,\n",
+        "    MAX(currency_code) AS currency_code\n",
+        "  FROM usage_with_prices\n",
+        "  GROUP BY\n",
+        "    workspace_id,\n",
+        "    workspace_name,\n",
+        "    workspace_url,\n",
+        "    usage_date,\n",
+        "    date(from_utc_timestamp(CAST(usage_date AS TIMESTAMP), 'Asia/Seoul'))\n",
+        "),\n",
+        "finalized AS (\n",
+        "  SELECT\n",
+        "    workspace_id,\n",
+        "    workspace_name,\n",
+        "    workspace_url,\n",
+        "    usage_date_utc,\n",
+        "    usage_date_kst,\n",
+        "    daily_cost_usd,\n",
+        "    ROUND(\n",
+        "      SUM(daily_cost_usd) OVER (\n",
+        "        PARTITION BY workspace_id\n",
+        "        ORDER BY usage_date_utc\n",
+        "        ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW\n",
+        "      ),\n",
+        "      4\n",
+        "    ) AS running_cost_usd,\n",
+        "    ROUND(SUM(daily_cost_usd) OVER (PARTITION BY workspace_id), 4) AS total_cost_usd_30d,\n",
+        "    daily_usage_quantity,\n",
+        "    currency_code\n",
+        "  FROM daily_cost\n",
+        ")\n",
+        "SELECT\n",
+        "  workspace_id,\n",
+        "  workspace_name,\n",
+        "  workspace_url,\n",
+        "  usage_date_utc,\n",
+        "  usage_date_kst,\n",
+        "  CAST(usage_date_utc AS TIMESTAMP) AS usage_time_utc,\n",
+        "  from_utc_timestamp(CAST(usage_date_utc AS TIMESTAMP), 'Asia/Seoul') AS usage_time_kst,\n",
+        "  daily_cost_usd,\n",
+        "  running_cost_usd,\n",
+        "  total_cost_usd_30d,\n",
+        "  daily_usage_quantity,\n",
+        "  currency_code\n",
+        "FROM finalized\n",
+        "ORDER BY usage_date_utc;"
+      ]
+    },
+    {
+      "name": "ds_cwe_ingest_trend_30d",
+      "displayName": "CWE Ingest Trend 30d",
+      "queryLines": [
+        "WITH params AS (\n",
+        "  SELECT 30 AS p_window_days\n",
+        "),\n",
+        "normalized AS (\n",
+        "  SELECT\n",
+        "    source_version_id,\n",
+        "    try_to_timestamp(ingested_at_utc) AS ingested_ts_utc\n",
+        "  FROM 3dt2ndteam5.cwe.cwe_weaknesses\n",
+        "),\n",
+        "scoped AS (\n",
+        "  SELECT\n",
+        "    source_version_id,\n",
+        "    ingested_ts_utc\n",
+        "  FROM normalized\n",
+        "  CROSS JOIN params p\n",
+        "  WHERE ingested_ts_utc IS NOT NULL\n",
+        "    AND ingested_ts_utc >= timestampadd(DAY, -p.p_window_days, current_timestamp())\n",
+        ")\n",
+        "SELECT\n",
+        "  date(ingested_ts_utc) AS ingest_date_utc,\n",
+        "  date(from_utc_timestamp(ingested_ts_utc, 'Asia/Seoul')) AS ingest_date_kst,\n",
+        "  COUNT(*) AS ingested_rows,\n",
+        "  COUNT(DISTINCT source_version_id) AS distinct_source_versions,\n",
+        "  MAX(ingested_ts_utc) AS latest_ingest_time_utc,\n",
+        "  from_utc_timestamp(MAX(ingested_ts_utc), 'Asia/Seoul') AS latest_ingest_time_kst\n",
+        "FROM scoped\n",
+        "GROUP BY\n",
+        "  date(ingested_ts_utc),\n",
+        "  date(from_utc_timestamp(ingested_ts_utc, 'Asia/Seoul'))\n",
+        "ORDER BY ingest_date_utc;"
+      ]
+    },
+    {
+      "name": "ds_cwe_deprecated_ratio_30d",
+      "displayName": "CWE Deprecated Ratio 30d",
+      "queryLines": [
+        "WITH params AS (\n",
+        "  SELECT 30 AS p_window_days\n",
+        "),\n",
+        "normalized AS (\n",
+        "  SELECT\n",
+        "    try_to_timestamp(ingested_at_utc) AS ingested_ts_utc,\n",
+        "    CASE\n",
+        "      WHEN upper(trim(COALESCE(title, ''))) LIKE 'DEPRECATED:%' THEN 1\n",
+        "      ELSE 0\n",
+        "    END AS is_deprecated\n",
+        "  FROM 3dt2ndteam5.cwe.cwe_weaknesses\n",
+        "),\n",
+        "scoped AS (\n",
+        "  SELECT\n",
+        "    ingested_ts_utc,\n",
+        "    is_deprecated\n",
+        "  FROM normalized\n",
+        "  CROSS JOIN params p\n",
+        "  WHERE ingested_ts_utc IS NOT NULL\n",
+        "    AND ingested_ts_utc >= timestampadd(DAY, -p.p_window_days, current_timestamp())\n",
+        "),\n",
+        "daily AS (\n",
+        "  SELECT\n",
+        "    date(ingested_ts_utc) AS metric_date_utc,\n",
+        "    date(from_utc_timestamp(ingested_ts_utc, 'Asia/Seoul')) AS metric_date_kst,\n",
+        "    COUNT(*) AS total_rows,\n",
+        "    SUM(is_deprecated) AS deprecated_rows\n",
+        "  FROM scoped\n",
+        "  GROUP BY\n",
+        "    date(ingested_ts_utc),\n",
+        "    date(from_utc_timestamp(ingested_ts_utc, 'Asia/Seoul'))\n",
+        ")\n",
+        "SELECT\n",
+        "  metric_date_utc,\n",
+        "  metric_date_kst,\n",
+        "  total_rows,\n",
+        "  deprecated_rows,\n",
+        "  ROUND(\n",
+        "    CASE\n",
+        "      WHEN total_rows = 0 THEN 0.0\n",
+        "      ELSE (deprecated_rows * 100.0) / total_rows\n",
+        "    END,\n",
+        "    2\n",
+        "  ) AS deprecated_ratio_pct\n",
+        "FROM daily\n",
+        "ORDER BY metric_date_utc;"
+      ]
+    },
+    {
+      "name": "ds_cwe_silver_quality_30d",
+      "displayName": "CWE Silver Quality 30d",
+      "queryLines": [
+        "WITH params AS (\n",
+        "  SELECT 30 AS p_window_days\n",
+        "),\n",
+        "bronze_base AS (\n",
+        "  SELECT\n",
+        "    try_to_timestamp(ingested_at_utc) AS ingested_ts_utc,\n",
+        "    weakness_id,\n",
+        "    title,\n",
+        "    description,\n",
+        "    extended_description,\n",
+        "    potential_mitigations\n",
+        "  FROM 3dt2ndteam5.cwe.cwe_weaknesses\n",
+        "),\n",
+        "scoped AS (\n",
+        "  SELECT\n",
+        "    ingested_ts_utc,\n",
+        "    weakness_id,\n",
+        "    title,\n",
+        "    description,\n",
+        "    extended_description,\n",
+        "    potential_mitigations\n",
+        "  FROM bronze_base\n",
+        "  CROSS JOIN params p\n",
+        "  WHERE ingested_ts_utc IS NOT NULL\n",
+        "    AND ingested_ts_utc >= timestampadd(DAY, -p.p_window_days, current_timestamp())\n",
+        "),\n",
+        "derived AS (\n",
+        "  SELECT\n",
+        "    ingested_ts_utc,\n",
+        "    CASE\n",
+        "      WHEN upper(trim(COALESCE(title, ''))) LIKE 'DEPRECATED:%' THEN 1\n",
+        "      ELSE 0\n",
+        "    END AS is_deprecated,\n",
+        "    trim(\n",
+        "      regexp_replace(\n",
+        "        concat_ws(\n",
+        "          ' ',\n",
+        "          concat('CWE-', COALESCE(weakness_id, '')),\n",
+        "          trim(regexp_replace(COALESCE(title, ''), '(?i)^\\\\s*DEPRECATED:\\\\s*', '')),\n",
+        "          COALESCE(description, ''),\n",
+        "          COALESCE(extended_description, ''),\n",
+        "          COALESCE(potential_mitigations, '')\n",
+        "        ),\n",
+        "        '\\\\s+',\n",
+        "        ' '\n",
+        "      )\n",
+        "    ) AS derived_search_text\n",
+        "  FROM scoped\n",
+        "),\n",
+        "silver_like_daily AS (\n",
+        "  SELECT\n",
+        "    date(ingested_ts_utc) AS metric_date_utc,\n",
+        "    date(from_utc_timestamp(ingested_ts_utc, 'Asia/Seoul')) AS metric_date_kst,\n",
+        "    COUNT(*) AS evaluated_rows,\n",
+        "    SUM(\n",
+        "      CASE\n",
+        "        WHEN derived_search_text IS NULL OR trim(derived_search_text) = '' THEN 1\n",
+        "        ELSE 0\n",
+        "      END\n",
+        "    ) AS empty_search_text_rows\n",
+        "  FROM derived\n",
+        "  WHERE is_deprecated = 0\n",
+        "  GROUP BY\n",
+        "    date(ingested_ts_utc),\n",
+        "    date(from_utc_timestamp(ingested_ts_utc, 'Asia/Seoul'))\n",
+        ")\n",
+        "SELECT\n",
+        "  metric_date_utc,\n",
+        "  metric_date_kst,\n",
+        "  evaluated_rows,\n",
+        "  empty_search_text_rows,\n",
+        "  ROUND(\n",
+        "    CASE\n",
+        "      WHEN evaluated_rows = 0 THEN 0.0\n",
+        "      ELSE (empty_search_text_rows * 100.0) / evaluated_rows\n",
+        "    END,\n",
+        "    4\n",
+        "  ) AS empty_search_text_ratio_pct\n",
+        "FROM silver_like_daily\n",
+        "ORDER BY metric_date_utc;"
+      ]
+    },
+    {
+      "name": "ds_ml_best_run_30d",
+      "displayName": "ML Best Run 30d",
+      "queryLines": [
+        "SELECT\n",
+        "  run_name,\n",
+        "  status,\n",
+        "  'best_r2_score' AS primary_metric_name,\n",
+        "  COALESCE(test_r2_latest, val_r2_latest, training_r2_latest) AS primary_metric_latest,\n",
+        "  COALESCE(test_r2_latest, val_r2_latest, training_r2_latest) AS test_r2_latest,\n",
+        "  COALESCE(test_rmse_latest, val_rmse_latest, training_rmse_latest) AS test_rmse_latest,\n",
+        "  training_data_count,\n",
+        "  run_end_time_utc,\n",
+        "  run_end_time_kst\n",
+        "FROM (\n",
+        "WITH params AS (\n",
+        "  SELECT 30 AS p_ml_window_days\n",
+        "),\n",
+        "runs_scoped AS (\n",
+        "  SELECT\n",
+        "    CAST(r.run_id AS STRING) AS run_id,\n",
+        "    CAST(r.workspace_id AS STRING) AS workspace_id,\n",
+        "    CAST(r.experiment_id AS STRING) AS experiment_id,\n",
+        "    r.run_name,\n",
+        "    r.status,\n",
+        "    r.created_by,\n",
+        "    r.start_time AS run_start_time_utc,\n",
+        "    r.end_time AS run_end_time_utc\n",
+        "  FROM system.mlflow.runs_latest r\n",
+        "  CROSS JOIN params p\n",
+        "  WHERE r.delete_time IS NULL\n",
+        "    AND r.start_time >= timestampadd(DAY, -p.p_ml_window_days, current_timestamp())\n",
+        "),\n",
+        "metrics_scoped AS (\n",
+        "  SELECT\n",
+        "    CAST(h.run_id AS STRING) AS run_id,\n",
+        "    lower(h.metric_name) AS metric_name_lc,\n",
+        "    CAST(h.metric_value AS DOUBLE) AS metric_value,\n",
+        "    h.metric_time,\n",
+        "    h.metric_step\n",
+        "  FROM system.mlflow.run_metrics_history h\n",
+        "  CROSS JOIN params p\n",
+        "  INNER JOIN runs_scoped r\n",
+        "    ON CAST(h.run_id AS STRING) = r.run_id\n",
+        "  WHERE h.metric_time >= timestampadd(DAY, -p.p_ml_window_days, current_timestamp())\n",
+        "),\n",
+        "metric_classified AS (\n",
+        "  SELECT\n",
+        "    run_id,\n",
+        "    metric_name_lc,\n",
+        "    metric_value,\n",
+        "    metric_time,\n",
+        "    metric_step,\n",
+        "    CASE\n",
+        "      WHEN metric_name_lc = 'training_score' THEN 'train_score'\n",
+        "      WHEN metric_name_lc = 'val_score' THEN 'val_score'\n",
+        "      WHEN metric_name_lc = 'test_score' THEN 'test_score'\n",
+        "\n",
+        "      WHEN metric_name_lc IN ('training_r2_score', 'r2_score_x_train') THEN 'train_r2'\n",
+        "      WHEN metric_name_lc IN ('val_r2_score', 'r2_score_x_val') THEN 'val_r2'\n",
+        "      WHEN metric_name_lc IN ('test_r2_score', 'r2_score_x_test') THEN 'test_r2'\n",
+        "\n",
+        "      WHEN metric_name_lc = 'training_root_mean_squared_error' THEN 'train_rmse'\n",
+        "      WHEN metric_name_lc = 'val_root_mean_squared_error' THEN 'val_rmse'\n",
+        "      WHEN metric_name_lc = 'test_root_mean_squared_error' THEN 'test_rmse'\n",
+        "\n",
+        "      WHEN metric_name_lc IN ('training_mean_squared_error', 'mean_squared_error_x_train') THEN 'train_mse'\n",
+        "      WHEN metric_name_lc IN ('val_mean_squared_error', 'mean_squared_error_x_val') THEN 'val_mse'\n",
+        "      WHEN metric_name_lc IN ('test_mean_squared_error', 'mean_squared_error_x_test') THEN 'test_mse'\n",
+        "\n",
+        "      WHEN metric_name_lc = 'training_mean_absolute_error' THEN 'train_mae'\n",
+        "      WHEN metric_name_lc = 'val_mean_absolute_error' THEN 'val_mae'\n",
+        "      WHEN metric_name_lc = 'test_mean_absolute_error' THEN 'test_mae'\n",
+        "      ELSE NULL\n",
+        "    END AS metric_bucket\n",
+        "  FROM metrics_scoped\n",
+        "),\n",
+        "metric_latest_ranked AS (\n",
+        "  SELECT\n",
+        "    run_id,\n",
+        "    metric_bucket,\n",
+        "    metric_value,\n",
+        "    ROW_NUMBER() OVER (\n",
+        "      PARTITION BY run_id, metric_bucket\n",
+        "      ORDER BY metric_time DESC, metric_step DESC, metric_value DESC\n",
+        "    ) AS rn\n",
+        "  FROM metric_classified\n",
+        "  WHERE metric_bucket IS NOT NULL\n",
+        "),\n",
+        "metric_latest AS (\n",
+        "  SELECT\n",
+        "    run_id,\n",
+        "    MAX(CASE WHEN metric_bucket = 'train_score' THEN metric_value END) AS training_score_latest,\n",
+        "    MAX(CASE WHEN metric_bucket = 'val_score' THEN metric_value END) AS val_score_latest,\n",
+        "    MAX(CASE WHEN metric_bucket = 'test_score' THEN metric_value END) AS test_score_latest,\n",
+        "\n",
+        "    MAX(CASE WHEN metric_bucket = 'train_r2' THEN metric_value END) AS training_r2_latest,\n",
+        "    MAX(CASE WHEN metric_bucket = 'val_r2' THEN metric_value END) AS val_r2_latest,\n",
+        "    MAX(CASE WHEN metric_bucket = 'test_r2' THEN metric_value END) AS test_r2_latest,\n",
+        "\n",
+        "    MAX(CASE WHEN metric_bucket = 'train_rmse' THEN metric_value END) AS training_rmse_latest,\n",
+        "    MAX(CASE WHEN metric_bucket = 'val_rmse' THEN metric_value END) AS val_rmse_latest,\n",
+        "    MAX(CASE WHEN metric_bucket = 'test_rmse' THEN metric_value END) AS test_rmse_latest,\n",
+        "\n",
+        "    MAX(CASE WHEN metric_bucket = 'train_mse' THEN metric_value END) AS training_mse_latest,\n",
+        "    MAX(CASE WHEN metric_bucket = 'val_mse' THEN metric_value END) AS val_mse_latest,\n",
+        "    MAX(CASE WHEN metric_bucket = 'test_mse' THEN metric_value END) AS test_mse_latest,\n",
+        "\n",
+        "    MAX(CASE WHEN metric_bucket = 'train_mae' THEN metric_value END) AS training_mae_latest,\n",
+        "    MAX(CASE WHEN metric_bucket = 'val_mae' THEN metric_value END) AS val_mae_latest,\n",
+        "    MAX(CASE WHEN metric_bucket = 'test_mae' THEN metric_value END) AS test_mae_latest\n",
+        "  FROM metric_latest_ranked\n",
+        "  WHERE rn = 1\n",
+        "  GROUP BY run_id\n",
+        "),\n",
+        "metric_best AS (\n",
+        "  SELECT\n",
+        "    run_id,\n",
+        "    MAX(CASE WHEN metric_bucket = 'train_score' THEN metric_value END) AS training_score_max,\n",
+        "    MAX(CASE WHEN metric_bucket = 'val_score' THEN metric_value END) AS val_score_max,\n",
+        "    MAX(CASE WHEN metric_bucket = 'test_score' THEN metric_value END) AS test_score_max,\n",
+        "\n",
+        "    MAX(CASE WHEN metric_bucket = 'train_r2' THEN metric_value END) AS training_r2_max,\n",
+        "    MAX(CASE WHEN metric_bucket = 'val_r2' THEN metric_value END) AS val_r2_max,\n",
+        "    MAX(CASE WHEN metric_bucket = 'test_r2' THEN metric_value END) AS test_r2_max,\n",
+        "\n",
+        "    MIN(CASE WHEN metric_bucket = 'train_rmse' THEN metric_value END) AS training_rmse_min,\n",
+        "    MIN(CASE WHEN metric_bucket = 'val_rmse' THEN metric_value END) AS val_rmse_min,\n",
+        "    MIN(CASE WHEN metric_bucket = 'test_rmse' THEN metric_value END) AS test_rmse_min,\n",
+        "\n",
+        "    MIN(CASE WHEN metric_bucket = 'train_mse' THEN metric_value END) AS training_mse_min,\n",
+        "    MIN(CASE WHEN metric_bucket = 'val_mse' THEN metric_value END) AS val_mse_min,\n",
+        "    MIN(CASE WHEN metric_bucket = 'test_mse' THEN metric_value END) AS test_mse_min,\n",
+        "\n",
+        "    MIN(CASE WHEN metric_bucket = 'train_mae' THEN metric_value END) AS training_mae_min,\n",
+        "    MIN(CASE WHEN metric_bucket = 'val_mae' THEN metric_value END) AS val_mae_min,\n",
+        "    MIN(CASE WHEN metric_bucket = 'test_mae' THEN metric_value END) AS test_mae_min\n",
+        "  FROM metric_classified\n",
+        "  WHERE metric_bucket IS NOT NULL\n",
+        "  GROUP BY run_id\n",
+        "),\n",
+        "training_metric_candidates AS (\n",
+        "  SELECT\n",
+        "    run_id,\n",
+        "    metric_name_lc AS training_data_count_key,\n",
+        "    metric_value AS training_data_count,\n",
+        "    metric_time AS training_data_count_observed_at_utc,\n",
+        "    CASE\n",
+        "      WHEN metric_name_lc IN (\n",
+        "        'training_example_count',\n",
+        "        'train_example_count',\n",
+        "        'training_sample_count',\n",
+        "        'train_sample_count',\n",
+        "        'training_row_count',\n",
+        "        'train_row_count',\n",
+        "        'training_rows',\n",
+        "        'train_rows',\n",
+        "        'training_records',\n",
+        "        'train_records',\n",
+        "        'dataset_row_count',\n",
+        "        'dataset_rows',\n",
+        "        'dataset_record_count',\n",
+        "        'dataset_size',\n",
+        "        'num_train_rows',\n",
+        "        'num_train_samples',\n",
+        "        'n_train',\n",
+        "        'train_size',\n",
+        "        'training_size'\n",
+        "      ) THEN 220\n",
+        "      WHEN metric_name_lc RLIKE '(train|training).*(count|rows?|samples?|examples?|records?|size|num)' THEN 180\n",
+        "      WHEN metric_name_lc RLIKE '(count|rows?|samples?|examples?|records?|size|num).*(train|training)' THEN 170\n",
+        "      WHEN metric_name_lc RLIKE '(dataset).*(count|rows?|samples?|examples?|records?|size|num)' THEN 150\n",
+        "      WHEN metric_name_lc RLIKE '(count|rows?|samples?|examples?|records?|size|num).*(dataset)' THEN 140\n",
+        "      ELSE NULL\n",
+        "    END AS candidate_score\n",
+        "  FROM metrics_scoped\n",
+        "  WHERE metric_value IS NOT NULL\n",
+        "    AND NOT isnan(metric_value)\n",
+        "    AND metric_value > 0\n",
+        "    AND metric_value < 1000000000000000\n",
+        "    AND metric_name_lc RLIKE '(count|rows?|samples?|examples?|records?|size|num)'\n",
+        "    AND metric_name_lc RLIKE '(train|training|dataset)'\n",
+        "    AND metric_name_lc NOT RLIKE '(score|r2|rmse|mse|mae|error|loss|auc|precision|recall|f1|mape|on_target)'\n",
+        "),\n",
+        "training_metric_best AS (\n",
+        "  SELECT\n",
+        "    run_id,\n",
+        "    training_data_count,\n",
+        "    training_data_count_key,\n",
+        "    training_data_count_observed_at_utc\n",
+        "  FROM (\n",
+        "    SELECT\n",
+        "      run_id,\n",
+        "      training_data_count,\n",
+        "      training_data_count_key,\n",
+        "      training_data_count_observed_at_utc,\n",
+        "      candidate_score,\n",
+        "      ROW_NUMBER() OVER (\n",
+        "        PARTITION BY run_id\n",
+        "        ORDER BY candidate_score DESC, training_data_count_observed_at_utc DESC, training_data_count DESC\n",
+        "      ) AS rn\n",
+        "    FROM training_metric_candidates\n",
+        "    WHERE training_data_count IS NOT NULL\n",
+        "      AND candidate_score IS NOT NULL\n",
+        "  ) ranked\n",
+        "  WHERE rn = 1\n",
+        "),\n",
+        "metric_key_profile AS (\n",
+        "  SELECT\n",
+        "    run_id,\n",
+        "    concat_ws(', ', slice(array_sort(collect_set(metric_name_lc)), 1, 50)) AS metric_keys_detected\n",
+        "  FROM metrics_scoped\n",
+        "  GROUP BY run_id\n",
+        ")\n",
+        "SELECT\n",
+        "  r.workspace_id,\n",
+        "  r.experiment_id,\n",
+        "  r.run_id,\n",
+        "  r.run_name,\n",
+        "  r.status,\n",
+        "  r.created_by,\n",
+        "  r.run_start_time_utc,\n",
+        "  from_utc_timestamp(r.run_start_time_utc, 'Asia/Seoul') AS run_start_time_kst,\n",
+        "  r.run_end_time_utc,\n",
+        "  from_utc_timestamp(r.run_end_time_utc, 'Asia/Seoul') AS run_end_time_kst,\n",
+        "  CASE\n",
+        "    WHEN r.run_end_time_utc IS NOT NULL AND r.run_start_time_utc IS NOT NULL\n",
+        "    THEN unix_timestamp(r.run_end_time_utc) - unix_timestamp(r.run_start_time_utc)\n",
+        "    ELSE NULL\n",
+        "  END AS run_duration_seconds,\n",
+        "\n",
+        "  ml.training_score_latest,\n",
+        "  mb.training_score_max,\n",
+        "  ml.val_score_latest,\n",
+        "  mb.val_score_max,\n",
+        "  ml.test_score_latest,\n",
+        "  mb.test_score_max,\n",
+        "\n",
+        "  ml.training_r2_latest,\n",
+        "  mb.training_r2_max,\n",
+        "  ml.val_r2_latest,\n",
+        "  mb.val_r2_max,\n",
+        "  ml.test_r2_latest,\n",
+        "  mb.test_r2_max,\n",
+        "\n",
+        "  ml.training_rmse_latest,\n",
+        "  mb.training_rmse_min,\n",
+        "  ml.val_rmse_latest,\n",
+        "  mb.val_rmse_min,\n",
+        "  ml.test_rmse_latest,\n",
+        "  mb.test_rmse_min,\n",
+        "\n",
+        "  ml.training_mse_latest,\n",
+        "  mb.training_mse_min,\n",
+        "  ml.val_mse_latest,\n",
+        "  mb.val_mse_min,\n",
+        "  ml.test_mse_latest,\n",
+        "  mb.test_mse_min,\n",
+        "\n",
+        "  ml.training_mae_latest,\n",
+        "  mb.training_mae_min,\n",
+        "  ml.val_mae_latest,\n",
+        "  mb.val_mae_min,\n",
+        "  ml.test_mae_latest,\n",
+        "  mb.test_mae_min,\n",
+        "\n",
+        "  'regression' AS model_family,\n",
+        "  CASE\n",
+        "    WHEN ml.test_r2_latest IS NOT NULL THEN 'test_r2_score'\n",
+        "    WHEN ml.val_r2_latest IS NOT NULL THEN 'val_r2_score'\n",
+        "    WHEN ml.training_r2_latest IS NOT NULL THEN 'training_r2_score'\n",
+        "    WHEN ml.test_score_latest IS NOT NULL THEN 'test_score'\n",
+        "    WHEN ml.val_score_latest IS NOT NULL THEN 'val_score'\n",
+        "    WHEN ml.training_score_latest IS NOT NULL THEN 'training_score'\n",
+        "    WHEN ml.test_rmse_latest IS NOT NULL THEN 'test_root_mean_squared_error'\n",
+        "    WHEN ml.val_rmse_latest IS NOT NULL THEN 'val_root_mean_squared_error'\n",
+        "    WHEN ml.training_rmse_latest IS NOT NULL THEN 'training_root_mean_squared_error'\n",
+        "    ELSE NULL\n",
+        "  END AS primary_metric_name,\n",
+        "  COALESCE(\n",
+        "    ml.test_r2_latest,\n",
+        "    ml.val_r2_latest,\n",
+        "    ml.training_r2_latest,\n",
+        "    ml.test_score_latest,\n",
+        "    ml.val_score_latest,\n",
+        "    ml.training_score_latest,\n",
+        "    ml.test_rmse_latest,\n",
+        "    ml.val_rmse_latest,\n",
+        "    ml.training_rmse_latest\n",
+        "  ) AS primary_metric_latest,\n",
+        "\n",
+        "  tb.training_data_count,\n",
+        "  CASE\n",
+        "    WHEN tb.training_data_count IS NOT NULL THEN 'metrics_history'\n",
+        "    ELSE 'not_found'\n",
+        "  END AS training_data_count_source,\n",
+        "  tb.training_data_count_key,\n",
+        "  tb.training_data_count_observed_at_utc,\n",
+        "  from_utc_timestamp(tb.training_data_count_observed_at_utc, 'Asia/Seoul') AS training_data_count_observed_at_kst,\n",
+        "\n",
+        "  mkp.metric_keys_detected,\n",
+        "  current_timestamp() AS generated_at_utc,\n",
+        "  from_utc_timestamp(current_timestamp(), 'Asia/Seoul') AS generated_at_kst\n",
+        "FROM runs_scoped r\n",
+        "LEFT JOIN metric_latest ml\n",
+        "  ON r.run_id = ml.run_id\n",
+        "LEFT JOIN metric_best mb\n",
+        "  ON r.run_id = mb.run_id\n",
+        "LEFT JOIN training_metric_best tb\n",
+        "  ON r.run_id = tb.run_id\n",
+        "LEFT JOIN metric_key_profile mkp\n",
+        "  ON r.run_id = mkp.run_id\n",
+        "ORDER BY COALESCE(r.run_end_time_utc, r.run_start_time_utc) DESC, r.run_id DESC\n",
+        ") t\n",
+        "WHERE COALESCE(test_r2_latest, val_r2_latest, training_r2_latest) IS NOT NULL\n",
+        "  AND COALESCE(test_rmse_latest, val_rmse_latest, training_rmse_latest) IS NOT NULL\n",
+        "  AND training_data_count IS NOT NULL\n",
+        "ORDER BY\n",
+        "  COALESCE(test_r2_latest, val_r2_latest, training_r2_latest) DESC,\n",
+        "  COALESCE(test_rmse_latest, val_rmse_latest, training_rmse_latest) ASC,\n",
+        "  run_end_time_utc DESC,\n",
+        "  run_id DESC\n",
+        "LIMIT 1"
+      ]
+    }
+  ],
+  "pages": [
+    {
+      "name": "cwe_ops_page",
+      "displayName": "CWE Ops & Cost Overview",
+      "layout": [
+        {
+          "widget": {
+            "name": "h_title",
+            "multilineTextboxSpec": {
+              "lines": [
+                "# CWE Ops & Cost Overview\n",
+                "최근 30일 · UTC/KST 동시표시 · 회귀 모델 기준"
+              ]
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 0,
+            "width": 6,
+            "height": 1
+          }
+        },
+        {
+          "widget": {
+            "name": "h_kpi",
+            "multilineTextboxSpec": {
+              "lines": [
+                "## KPI Snapshot"
+              ]
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 1,
+            "width": 6,
+            "height": 1
+          }
+        },
+        {
+          "widget": {
+            "name": "k_bronze",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_cwe_counts",
+                  "fields": [
+                    {
+                      "name": "bronze_count",
+                      "expression": "MAX(`bronze_count`)"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "encodings": {
+                "value": {
+                  "displayName": "Bronze Rows",
+                  "fieldName": "bronze_count"
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Bronze Rows"
+              },
+              "version": 2,
+              "widgetType": "counter"
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 2,
+            "width": 1,
+            "height": 2
+          }
+        },
+        {
+          "widget": {
+            "name": "k_silver",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_cwe_counts",
+                  "fields": [
+                    {
+                      "name": "silver_count",
+                      "expression": "MAX(`silver_count`)"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "encodings": {
+                "value": {
+                  "displayName": "Silver Rows",
+                  "fieldName": "silver_count"
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Silver Rows"
+              },
+              "version": 2,
+              "widgetType": "counter"
+            }
+          },
+          "position": {
+            "x": 1,
+            "y": 2,
+            "width": 1,
+            "height": 2
+          }
+        },
+        {
+          "widget": {
+            "name": "k_primary",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_ml_best_run_30d",
+                  "fields": [
+                    {
+                      "name": "primary_metric_latest",
+                      "expression": "MAX(`primary_metric_latest`)"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "encodings": {
+                "value": {
+                  "displayName": "Best Primary Metric (30d)",
+                  "fieldName": "primary_metric_latest"
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Best Primary Metric (30d)"
+              },
+              "version": 2,
+              "widgetType": "counter"
+            }
+          },
+          "position": {
+            "x": 2,
+            "y": 2,
+            "width": 1,
+            "height": 2
+          }
+        },
+        {
+          "widget": {
+            "name": "k_r2",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_ml_runs_30d",
+                  "fields": [
+                    {
+                      "name": "test_r2_latest",
+                      "expression": "MAX(`test_r2_latest`)"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "encodings": {
+                "value": {
+                  "displayName": "Latest Test R2",
+                  "fieldName": "test_r2_latest"
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Latest Test R2"
+              },
+              "version": 2,
+              "widgetType": "counter"
+            }
+          },
+          "position": {
+            "x": 3,
+            "y": 2,
+            "width": 1,
+            "height": 2
+          }
+        },
+        {
+          "widget": {
+            "name": "k_cost",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_cost_daily_30d",
+                  "fields": [
+                    {
+                      "name": "total_cost_usd_30d",
+                      "expression": "MAX(`total_cost_usd_30d`)"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "encodings": {
+                "value": {
+                  "displayName": "Total Cost 30d (USD)",
+                  "fieldName": "total_cost_usd_30d"
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Total Cost 30d (USD)"
+              },
+              "version": 2,
+              "widgetType": "counter"
+            }
+          },
+          "position": {
+            "x": 4,
+            "y": 2,
+            "width": 1,
+            "height": 2
+          }
+        },
+        {
+          "widget": {
+            "name": "k_train_rows",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_ml_training_data_count_30d",
+                  "fields": [
+                    {
+                      "name": "latest_training_data_count",
+                      "expression": "MAX(`latest_training_data_count`)"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "encodings": {
+                "value": {
+                  "displayName": "Latest Training Rows",
+                  "fieldName": "latest_training_data_count"
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Latest Training Rows"
+              },
+              "version": 2,
+              "widgetType": "counter"
+            }
+          },
+          "position": {
+            "x": 5,
+            "y": 2,
+            "width": 1,
+            "height": 2
+          }
+        },
+        {
+          "widget": {
+            "name": "h_ops",
+            "multilineTextboxSpec": {
+              "lines": [
+                "## Ops Status"
+              ]
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 4,
+            "width": 6,
+            "height": 1
+          }
+        },
+        {
+          "widget": {
+            "name": "t_job_overall",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_cwe_job_overall_latest",
+                  "fields": [
+                    {
+                      "name": "job_name",
+                      "expression": "`job_name`"
+                    },
+                    {
+                      "name": "latest_result_state",
+                      "expression": "`latest_result_state`"
+                    },
+                    {
+                      "name": "latest_time_utc",
+                      "expression": "`latest_time_utc`"
+                    },
+                    {
+                      "name": "latest_time_kst",
+                      "expression": "`latest_time_kst`"
+                    },
+                    {
+                      "name": "run_duration_seconds",
+                      "expression": "`run_duration_seconds`"
+                    }
+                  ],
+                  "disaggregated": true
+                }
+              }
+            ],
+            "spec": {
+              "allowHTMLByDefault": false,
+              "condensed": true,
+              "encodings": {
+                "columns": [
+                  {
+                    "alignContent": "left",
+                    "allowHTML": false,
+                    "allowSearch": false,
+                    "booleanValues": [
+                      "false",
+                      "true"
+                    ],
+                    "displayAs": "string",
+                    "displayName": "Job",
+                    "fieldName": "job_name",
+                    "highlightLinks": false,
+                    "imageHeight": "",
+                    "imageTitleTemplate": "{{ @ }}",
+                    "imageUrlTemplate": "{{ @ }}",
+                    "imageWidth": "",
+                    "linkOpenInNewTab": true,
+                    "linkTextTemplate": "{{ @ }}",
+                    "linkTitleTemplate": "{{ @ }}",
+                    "linkUrlTemplate": "{{ @ }}",
+                    "order": 100000,
+                    "preserveWhitespace": false,
+                    "title": "Job",
+                    "type": "string",
+                    "useMonospaceFont": false,
+                    "visible": true
+                  },
+                  {
+                    "alignContent": "left",
+                    "allowHTML": false,
+                    "allowSearch": false,
+                    "booleanValues": [
+                      "false",
+                      "true"
+                    ],
+                    "displayAs": "string",
+                    "displayName": "State",
+                    "fieldName": "latest_result_state",
+                    "highlightLinks": false,
+                    "imageHeight": "",
+                    "imageTitleTemplate": "{{ @ }}",
+                    "imageUrlTemplate": "{{ @ }}",
+                    "imageWidth": "",
+                    "linkOpenInNewTab": true,
+                    "linkTextTemplate": "{{ @ }}",
+                    "linkTitleTemplate": "{{ @ }}",
+                    "linkUrlTemplate": "{{ @ }}",
+                    "order": 100000,
+                    "preserveWhitespace": false,
+                    "title": "State",
+                    "type": "string",
+                    "useMonospaceFont": false,
+                    "visible": true
+                  },
+                  {
+                    "alignContent": "left",
+                    "allowHTML": false,
+                    "allowSearch": false,
+                    "booleanValues": [
+                      "false",
+                      "true"
+                    ],
+                    "displayAs": "string",
+                    "displayName": "UTC",
+                    "fieldName": "latest_time_utc",
+                    "highlightLinks": false,
+                    "imageHeight": "",
+                    "imageTitleTemplate": "{{ @ }}",
+                    "imageUrlTemplate": "{{ @ }}",
+                    "imageWidth": "",
+                    "linkOpenInNewTab": true,
+                    "linkTextTemplate": "{{ @ }}",
+                    "linkTitleTemplate": "{{ @ }}",
+                    "linkUrlTemplate": "{{ @ }}",
+                    "order": 100000,
+                    "preserveWhitespace": false,
+                    "title": "UTC",
+                    "type": "string",
+                    "useMonospaceFont": false,
+                    "visible": true
+                  },
+                  {
+                    "alignContent": "left",
+                    "allowHTML": false,
+                    "allowSearch": false,
+                    "booleanValues": [
+                      "false",
+                      "true"
+                    ],
+                    "displayAs": "string",
+                    "displayName": "KST",
+                    "fieldName": "latest_time_kst",
+                    "highlightLinks": false,
+                    "imageHeight": "",
+                    "imageTitleTemplate": "{{ @ }}",
+                    "imageUrlTemplate": "{{ @ }}",
+                    "imageWidth": "",
+                    "linkOpenInNewTab": true,
+                    "linkTextTemplate": "{{ @ }}",
+                    "linkTitleTemplate": "{{ @ }}",
+                    "linkUrlTemplate": "{{ @ }}",
+                    "order": 100000,
+                    "preserveWhitespace": false,
+                    "title": "KST",
+                    "type": "string",
+                    "useMonospaceFont": false,
+                    "visible": true
+                  },
+                  {
+                    "alignContent": "right",
+                    "allowHTML": false,
+                    "allowSearch": false,
+                    "booleanValues": [
+                      "false",
+                      "true"
+                    ],
+                    "displayAs": "number",
+                    "displayName": "Duration(s)",
+                    "fieldName": "run_duration_seconds",
+                    "highlightLinks": false,
+                    "imageHeight": "",
+                    "imageTitleTemplate": "{{ @ }}",
+                    "imageUrlTemplate": "{{ @ }}",
+                    "imageWidth": "",
+                    "linkOpenInNewTab": true,
+                    "linkTextTemplate": "{{ @ }}",
+                    "linkTitleTemplate": "{{ @ }}",
+                    "linkUrlTemplate": "{{ @ }}",
+                    "order": 100004,
+                    "preserveWhitespace": false,
+                    "title": "Duration(s)",
+                    "type": "integer",
+                    "useMonospaceFont": false,
+                    "visible": true,
+                    "numberFormat": "0"
+                  }
+                ]
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Latest CWE Job"
+              },
+              "invisibleColumns": [],
+              "itemsPerPage": 20,
+              "paginationSize": "default",
+              "version": 1,
+              "widgetType": "table",
+              "withRowNumber": false
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 5,
+            "width": 2,
+            "height": 4
+          }
+        },
+        {
+          "widget": {
+            "name": "t_compute",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_compute_workspace_status_30d",
+                  "fields": [
+                    {
+                      "name": "telemetry_freshness",
+                      "expression": "`telemetry_freshness`"
+                    },
+                    {
+                      "name": "active_clusters_last_hour",
+                      "expression": "`active_clusters_last_hour`"
+                    },
+                    {
+                      "name": "active_instances_last_hour",
+                      "expression": "`active_instances_last_hour`"
+                    },
+                    {
+                      "name": "avg_cpu_user_percent_30d",
+                      "expression": "`avg_cpu_user_percent_30d`"
+                    },
+                    {
+                      "name": "avg_mem_used_percent_30d",
+                      "expression": "`avg_mem_used_percent_30d`"
+                    },
+                    {
+                      "name": "last_observed_utc",
+                      "expression": "`last_observed_utc`"
+                    },
+                    {
+                      "name": "last_observed_kst",
+                      "expression": "`last_observed_kst`"
+                    }
+                  ],
+                  "disaggregated": true
+                }
+              }
+            ],
+            "spec": {
+              "allowHTMLByDefault": false,
+              "condensed": true,
+              "encodings": {
+                "columns": [
+                  {
+                    "alignContent": "left",
+                    "allowHTML": false,
+                    "allowSearch": false,
+                    "booleanValues": [
+                      "false",
+                      "true"
+                    ],
+                    "displayAs": "string",
+                    "displayName": "Freshness",
+                    "fieldName": "telemetry_freshness",
+                    "highlightLinks": false,
+                    "imageHeight": "",
+                    "imageTitleTemplate": "{{ @ }}",
+                    "imageUrlTemplate": "{{ @ }}",
+                    "imageWidth": "",
+                    "linkOpenInNewTab": true,
+                    "linkTextTemplate": "{{ @ }}",
+                    "linkTitleTemplate": "{{ @ }}",
+                    "linkUrlTemplate": "{{ @ }}",
+                    "order": 100000,
+                    "preserveWhitespace": false,
+                    "title": "Freshness",
+                    "type": "string",
+                    "useMonospaceFont": false,
+                    "visible": true
+                  },
+                  {
+                    "alignContent": "right",
+                    "allowHTML": false,
+                    "allowSearch": false,
+                    "booleanValues": [
+                      "false",
+                      "true"
+                    ],
+                    "displayAs": "number",
+                    "displayName": "Clusters(1h)",
+                    "fieldName": "active_clusters_last_hour",
+                    "highlightLinks": false,
+                    "imageHeight": "",
+                    "imageTitleTemplate": "{{ @ }}",
+                    "imageUrlTemplate": "{{ @ }}",
+                    "imageWidth": "",
+                    "linkOpenInNewTab": true,
+                    "linkTextTemplate": "{{ @ }}",
+                    "linkTitleTemplate": "{{ @ }}",
+                    "linkUrlTemplate": "{{ @ }}",
+                    "order": 100001,
+                    "preserveWhitespace": false,
+                    "title": "Clusters(1h)",
+                    "type": "integer",
+                    "useMonospaceFont": false,
+                    "visible": true,
+                    "numberFormat": "0"
+                  },
+                  {
+                    "alignContent": "right",
+                    "allowHTML": false,
+                    "allowSearch": false,
+                    "booleanValues": [
+                      "false",
+                      "true"
+                    ],
+                    "displayAs": "number",
+                    "displayName": "Instances(1h)",
+                    "fieldName": "active_instances_last_hour",
+                    "highlightLinks": false,
+                    "imageHeight": "",
+                    "imageTitleTemplate": "{{ @ }}",
+                    "imageUrlTemplate": "{{ @ }}",
+                    "imageWidth": "",
+                    "linkOpenInNewTab": true,
+                    "linkTextTemplate": "{{ @ }}",
+                    "linkTitleTemplate": "{{ @ }}",
+                    "linkUrlTemplate": "{{ @ }}",
+                    "order": 100002,
+                    "preserveWhitespace": false,
+                    "title": "Instances(1h)",
+                    "type": "integer",
+                    "useMonospaceFont": false,
+                    "visible": true,
+                    "numberFormat": "0"
+                  },
+                  {
+                    "alignContent": "right",
+                    "allowHTML": false,
+                    "allowSearch": false,
+                    "booleanValues": [
+                      "false",
+                      "true"
+                    ],
+                    "displayAs": "number",
+                    "displayName": "CPU% Avg",
+                    "fieldName": "avg_cpu_user_percent_30d",
+                    "highlightLinks": false,
+                    "imageHeight": "",
+                    "imageTitleTemplate": "{{ @ }}",
+                    "imageUrlTemplate": "{{ @ }}",
+                    "imageWidth": "",
+                    "linkOpenInNewTab": true,
+                    "linkTextTemplate": "{{ @ }}",
+                    "linkTitleTemplate": "{{ @ }}",
+                    "linkUrlTemplate": "{{ @ }}",
+                    "order": 100003,
+                    "preserveWhitespace": false,
+                    "title": "CPU% Avg",
+                    "type": "float",
+                    "useMonospaceFont": false,
+                    "visible": true,
+                    "numberFormat": "0.00"
+                  },
+                  {
+                    "alignContent": "right",
+                    "allowHTML": false,
+                    "allowSearch": false,
+                    "booleanValues": [
+                      "false",
+                      "true"
+                    ],
+                    "displayAs": "number",
+                    "displayName": "Mem% Avg",
+                    "fieldName": "avg_mem_used_percent_30d",
+                    "highlightLinks": false,
+                    "imageHeight": "",
+                    "imageTitleTemplate": "{{ @ }}",
+                    "imageUrlTemplate": "{{ @ }}",
+                    "imageWidth": "",
+                    "linkOpenInNewTab": true,
+                    "linkTextTemplate": "{{ @ }}",
+                    "linkTitleTemplate": "{{ @ }}",
+                    "linkUrlTemplate": "{{ @ }}",
+                    "order": 100004,
+                    "preserveWhitespace": false,
+                    "title": "Mem% Avg",
+                    "type": "float",
+                    "useMonospaceFont": false,
+                    "visible": true,
+                    "numberFormat": "0.00"
+                  },
+                  {
+                    "alignContent": "left",
+                    "allowHTML": false,
+                    "allowSearch": false,
+                    "booleanValues": [
+                      "false",
+                      "true"
+                    ],
+                    "displayAs": "string",
+                    "displayName": "UTC",
+                    "fieldName": "last_observed_utc",
+                    "highlightLinks": false,
+                    "imageHeight": "",
+                    "imageTitleTemplate": "{{ @ }}",
+                    "imageUrlTemplate": "{{ @ }}",
+                    "imageWidth": "",
+                    "linkOpenInNewTab": true,
+                    "linkTextTemplate": "{{ @ }}",
+                    "linkTitleTemplate": "{{ @ }}",
+                    "linkUrlTemplate": "{{ @ }}",
+                    "order": 100000,
+                    "preserveWhitespace": false,
+                    "title": "UTC",
+                    "type": "string",
+                    "useMonospaceFont": false,
+                    "visible": true
+                  },
+                  {
+                    "alignContent": "left",
+                    "allowHTML": false,
+                    "allowSearch": false,
+                    "booleanValues": [
+                      "false",
+                      "true"
+                    ],
+                    "displayAs": "string",
+                    "displayName": "KST",
+                    "fieldName": "last_observed_kst",
+                    "highlightLinks": false,
+                    "imageHeight": "",
+                    "imageTitleTemplate": "{{ @ }}",
+                    "imageUrlTemplate": "{{ @ }}",
+                    "imageWidth": "",
+                    "linkOpenInNewTab": true,
+                    "linkTextTemplate": "{{ @ }}",
+                    "linkTitleTemplate": "{{ @ }}",
+                    "linkUrlTemplate": "{{ @ }}",
+                    "order": 100000,
+                    "preserveWhitespace": false,
+                    "title": "KST",
+                    "type": "string",
+                    "useMonospaceFont": false,
+                    "visible": true
+                  }
+                ]
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Compute Health"
+              },
+              "invisibleColumns": [],
+              "itemsPerPage": 20,
+              "paginationSize": "default",
+              "version": 1,
+              "widgetType": "table",
+              "withRowNumber": false
+            }
+          },
+          "position": {
+            "x": 2,
+            "y": 5,
+            "width": 2,
+            "height": 4
+          }
+        },
+        {
+          "widget": {
+            "name": "t_job_by_job",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_cwe_job_latest_by_job",
+                  "fields": [
+                    {
+                      "name": "job_name",
+                      "expression": "`job_name`"
+                    },
+                    {
+                      "name": "latest_result_state",
+                      "expression": "`latest_result_state`"
+                    },
+                    {
+                      "name": "latest_time_utc",
+                      "expression": "`latest_time_utc`"
+                    },
+                    {
+                      "name": "latest_time_kst",
+                      "expression": "`latest_time_kst`"
+                    }
+                  ],
+                  "disaggregated": true
+                }
+              }
+            ],
+            "spec": {
+              "allowHTMLByDefault": false,
+              "condensed": true,
+              "encodings": {
+                "columns": [
+                  {
+                    "alignContent": "left",
+                    "allowHTML": false,
+                    "allowSearch": false,
+                    "booleanValues": [
+                      "false",
+                      "true"
+                    ],
+                    "displayAs": "string",
+                    "displayName": "Job",
+                    "fieldName": "job_name",
+                    "highlightLinks": false,
+                    "imageHeight": "",
+                    "imageTitleTemplate": "{{ @ }}",
+                    "imageUrlTemplate": "{{ @ }}",
+                    "imageWidth": "",
+                    "linkOpenInNewTab": true,
+                    "linkTextTemplate": "{{ @ }}",
+                    "linkTitleTemplate": "{{ @ }}",
+                    "linkUrlTemplate": "{{ @ }}",
+                    "order": 100000,
+                    "preserveWhitespace": false,
+                    "title": "Job",
+                    "type": "string",
+                    "useMonospaceFont": false,
+                    "visible": true
+                  },
+                  {
+                    "alignContent": "left",
+                    "allowHTML": false,
+                    "allowSearch": false,
+                    "booleanValues": [
+                      "false",
+                      "true"
+                    ],
+                    "displayAs": "string",
+                    "displayName": "State",
+                    "fieldName": "latest_result_state",
+                    "highlightLinks": false,
+                    "imageHeight": "",
+                    "imageTitleTemplate": "{{ @ }}",
+                    "imageUrlTemplate": "{{ @ }}",
+                    "imageWidth": "",
+                    "linkOpenInNewTab": true,
+                    "linkTextTemplate": "{{ @ }}",
+                    "linkTitleTemplate": "{{ @ }}",
+                    "linkUrlTemplate": "{{ @ }}",
+                    "order": 100000,
+                    "preserveWhitespace": false,
+                    "title": "State",
+                    "type": "string",
+                    "useMonospaceFont": false,
+                    "visible": true
+                  },
+                  {
+                    "alignContent": "left",
+                    "allowHTML": false,
+                    "allowSearch": false,
+                    "booleanValues": [
+                      "false",
+                      "true"
+                    ],
+                    "displayAs": "string",
+                    "displayName": "UTC",
+                    "fieldName": "latest_time_utc",
+                    "highlightLinks": false,
+                    "imageHeight": "",
+                    "imageTitleTemplate": "{{ @ }}",
+                    "imageUrlTemplate": "{{ @ }}",
+                    "imageWidth": "",
+                    "linkOpenInNewTab": true,
+                    "linkTextTemplate": "{{ @ }}",
+                    "linkTitleTemplate": "{{ @ }}",
+                    "linkUrlTemplate": "{{ @ }}",
+                    "order": 100000,
+                    "preserveWhitespace": false,
+                    "title": "UTC",
+                    "type": "string",
+                    "useMonospaceFont": false,
+                    "visible": true
+                  },
+                  {
+                    "alignContent": "left",
+                    "allowHTML": false,
+                    "allowSearch": false,
+                    "booleanValues": [
+                      "false",
+                      "true"
+                    ],
+                    "displayAs": "string",
+                    "displayName": "KST",
+                    "fieldName": "latest_time_kst",
+                    "highlightLinks": false,
+                    "imageHeight": "",
+                    "imageTitleTemplate": "{{ @ }}",
+                    "imageUrlTemplate": "{{ @ }}",
+                    "imageWidth": "",
+                    "linkOpenInNewTab": true,
+                    "linkTextTemplate": "{{ @ }}",
+                    "linkTitleTemplate": "{{ @ }}",
+                    "linkUrlTemplate": "{{ @ }}",
+                    "order": 100000,
+                    "preserveWhitespace": false,
+                    "title": "KST",
+                    "type": "string",
+                    "useMonospaceFont": false,
+                    "visible": true
+                  }
+                ]
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Job Status by Job"
+              },
+              "invisibleColumns": [],
+              "itemsPerPage": 20,
+              "paginationSize": "default",
+              "version": 1,
+              "widgetType": "table",
+              "withRowNumber": false
+            }
+          },
+          "position": {
+            "x": 4,
+            "y": 5,
+            "width": 2,
+            "height": 4
+          }
+        },
+        {
+          "widget": {
+            "name": "h_ml",
+            "multilineTextboxSpec": {
+              "lines": [
+                "## ML Regression Performance"
+              ]
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 9,
+            "width": 6,
+            "height": 1
+          }
+        },
+        {
+          "widget": {
+            "name": "b_primary_metric_trend_daily",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_ml_runs_30d",
+                  "fields": [
+                    {
+                      "name": "run_end_time_utc",
+                      "expression": "`run_end_time_utc`"
+                    },
+                    {
+                      "name": "primary_metric_best",
+                      "expression": "MAX(COALESCE(`test_r2_latest`, `val_r2_latest`, `training_r2_latest`))"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "encodings": {
+                "label": {
+                  "show": false
+                },
+                "x": {
+                  "axis": {
+                    "title": "run_end_time_utc"
+                  },
+                  "displayName": "run_end_time_utc",
+                  "fieldName": "run_end_time_utc",
+                  "scale": {
+                    "type": "temporal"
+                  }
+                },
+                "y": {
+                  "axis": {
+                    "title": "Best R2"
+                  },
+                  "displayName": "primary_metric_best",
+                  "fieldName": "primary_metric_best",
+                  "scale": {
+                    "type": "quantitative"
+                  }
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Primary Metric Trend (Best R2 by Day, 30d)"
+              },
+              "mark": {
+                "colors": [
+                  "#00A972",
+                  "#8BCAE7"
+                ]
+              },
+              "version": 3,
+              "widgetType": "line"
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 10,
+            "width": 3,
+            "height": 4
+          }
+        },
+        {
+          "widget": {
+            "name": "b_training_rows_trend_daily",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_ml_runs_30d",
+                  "fields": [
+                    {
+                      "name": "run_end_time_utc",
+                      "expression": "`run_end_time_utc`"
+                    },
+                    {
+                      "name": "training_data_count_avg",
+                      "expression": "AVG(`training_data_count`)"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "encodings": {
+                "label": {
+                  "show": false
+                },
+                "x": {
+                  "axis": {
+                    "title": "run_end_time_utc"
+                  },
+                  "displayName": "run_end_time_utc",
+                  "fieldName": "run_end_time_utc",
+                  "scale": {
+                    "type": "temporal"
+                  }
+                },
+                "y": {
+                  "axis": {
+                    "title": "Avg Training Rows"
+                  },
+                  "displayName": "training_data_count_avg",
+                  "fieldName": "training_data_count_avg",
+                  "scale": {
+                    "type": "quantitative"
+                  }
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Training Rows Trend (Daily Avg, 30d)"
+              },
+              "mark": {
+                "colors": [
+                  "#1D6FA3",
+                  "#8BCAE7"
+                ]
+              },
+              "version": 3,
+              "widgetType": "line"
+            }
+          },
+          "position": {
+            "x": 3,
+            "y": 10,
+            "width": 3,
+            "height": 4
+          }
+        },
+        {
+          "widget": {
+            "name": "t_best_run",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_ml_best_run_30d",
+                  "fields": [
+                    {
+                      "name": "run_name",
+                      "expression": "`run_name`"
+                    },
+                    {
+                      "name": "status",
+                      "expression": "`status`"
+                    },
+                    {
+                      "name": "primary_metric_name",
+                      "expression": "`primary_metric_name`"
+                    },
+                    {
+                      "name": "primary_metric_latest",
+                      "expression": "`primary_metric_latest`"
+                    },
+                    {
+                      "name": "test_r2_latest",
+                      "expression": "`test_r2_latest`"
+                    },
+                    {
+                      "name": "test_rmse_latest",
+                      "expression": "`test_rmse_latest`"
+                    },
+                    {
+                      "name": "training_data_count",
+                      "expression": "`training_data_count`"
+                    },
+                    {
+                      "name": "run_end_time_utc",
+                      "expression": "`run_end_time_utc`"
+                    },
+                    {
+                      "name": "run_end_time_kst",
+                      "expression": "`run_end_time_kst`"
+                    }
+                  ],
+                  "disaggregated": true
+                }
+              }
+            ],
+            "spec": {
+              "allowHTMLByDefault": false,
+              "condensed": true,
+              "encodings": {
+                "columns": [
+                  {
+                    "alignContent": "left",
+                    "allowHTML": false,
+                    "allowSearch": false,
+                    "booleanValues": [
+                      "false",
+                      "true"
+                    ],
+                    "displayAs": "string",
+                    "displayName": "Run",
+                    "fieldName": "run_name",
+                    "highlightLinks": false,
+                    "imageHeight": "",
+                    "imageTitleTemplate": "{{ @ }}",
+                    "imageUrlTemplate": "{{ @ }}",
+                    "imageWidth": "",
+                    "linkOpenInNewTab": true,
+                    "linkTextTemplate": "{{ @ }}",
+                    "linkTitleTemplate": "{{ @ }}",
+                    "linkUrlTemplate": "{{ @ }}",
+                    "order": 100000,
+                    "preserveWhitespace": false,
+                    "title": "Run",
+                    "type": "string",
+                    "useMonospaceFont": false,
+                    "visible": true
+                  },
+                  {
+                    "alignContent": "left",
+                    "allowHTML": false,
+                    "allowSearch": false,
+                    "booleanValues": [
+                      "false",
+                      "true"
+                    ],
+                    "displayAs": "string",
+                    "displayName": "Status",
+                    "fieldName": "status",
+                    "highlightLinks": false,
+                    "imageHeight": "",
+                    "imageTitleTemplate": "{{ @ }}",
+                    "imageUrlTemplate": "{{ @ }}",
+                    "imageWidth": "",
+                    "linkOpenInNewTab": true,
+                    "linkTextTemplate": "{{ @ }}",
+                    "linkTitleTemplate": "{{ @ }}",
+                    "linkUrlTemplate": "{{ @ }}",
+                    "order": 100000,
+                    "preserveWhitespace": false,
+                    "title": "Status",
+                    "type": "string",
+                    "useMonospaceFont": false,
+                    "visible": true
+                  },
+                  {
+                    "alignContent": "left",
+                    "allowHTML": false,
+                    "allowSearch": false,
+                    "booleanValues": [
+                      "false",
+                      "true"
+                    ],
+                    "displayAs": "string",
+                    "displayName": "Metric",
+                    "fieldName": "primary_metric_name",
+                    "highlightLinks": false,
+                    "imageHeight": "",
+                    "imageTitleTemplate": "{{ @ }}",
+                    "imageUrlTemplate": "{{ @ }}",
+                    "imageWidth": "",
+                    "linkOpenInNewTab": true,
+                    "linkTextTemplate": "{{ @ }}",
+                    "linkTitleTemplate": "{{ @ }}",
+                    "linkUrlTemplate": "{{ @ }}",
+                    "order": 100000,
+                    "preserveWhitespace": false,
+                    "title": "Metric",
+                    "type": "string",
+                    "useMonospaceFont": false,
+                    "visible": true
+                  },
+                  {
+                    "alignContent": "right",
+                    "allowHTML": false,
+                    "allowSearch": false,
+                    "booleanValues": [
+                      "false",
+                      "true"
+                    ],
+                    "displayAs": "number",
+                    "displayName": "Metric Value",
+                    "fieldName": "primary_metric_latest",
+                    "highlightLinks": false,
+                    "imageHeight": "",
+                    "imageTitleTemplate": "{{ @ }}",
+                    "imageUrlTemplate": "{{ @ }}",
+                    "imageWidth": "",
+                    "linkOpenInNewTab": true,
+                    "linkTextTemplate": "{{ @ }}",
+                    "linkTitleTemplate": "{{ @ }}",
+                    "linkUrlTemplate": "{{ @ }}",
+                    "order": 100003,
+                    "preserveWhitespace": false,
+                    "title": "Metric Value",
+                    "type": "float",
+                    "useMonospaceFont": false,
+                    "visible": true,
+                    "numberFormat": "0.0000"
+                  },
+                  {
+                    "alignContent": "right",
+                    "allowHTML": false,
+                    "allowSearch": false,
+                    "booleanValues": [
+                      "false",
+                      "true"
+                    ],
+                    "displayAs": "number",
+                    "displayName": "Test R2",
+                    "fieldName": "test_r2_latest",
+                    "highlightLinks": false,
+                    "imageHeight": "",
+                    "imageTitleTemplate": "{{ @ }}",
+                    "imageUrlTemplate": "{{ @ }}",
+                    "imageWidth": "",
+                    "linkOpenInNewTab": true,
+                    "linkTextTemplate": "{{ @ }}",
+                    "linkTitleTemplate": "{{ @ }}",
+                    "linkUrlTemplate": "{{ @ }}",
+                    "order": 100004,
+                    "preserveWhitespace": false,
+                    "title": "Test R2",
+                    "type": "float",
+                    "useMonospaceFont": false,
+                    "visible": true,
+                    "numberFormat": "0.0000"
+                  },
+                  {
+                    "alignContent": "right",
+                    "allowHTML": false,
+                    "allowSearch": false,
+                    "booleanValues": [
+                      "false",
+                      "true"
+                    ],
+                    "displayAs": "number",
+                    "displayName": "Test RMSE",
+                    "fieldName": "test_rmse_latest",
+                    "highlightLinks": false,
+                    "imageHeight": "",
+                    "imageTitleTemplate": "{{ @ }}",
+                    "imageUrlTemplate": "{{ @ }}",
+                    "imageWidth": "",
+                    "linkOpenInNewTab": true,
+                    "linkTextTemplate": "{{ @ }}",
+                    "linkTitleTemplate": "{{ @ }}",
+                    "linkUrlTemplate": "{{ @ }}",
+                    "order": 100005,
+                    "preserveWhitespace": false,
+                    "title": "Test RMSE",
+                    "type": "float",
+                    "useMonospaceFont": false,
+                    "visible": true,
+                    "numberFormat": "0.0000"
+                  },
+                  {
+                    "alignContent": "right",
+                    "allowHTML": false,
+                    "allowSearch": false,
+                    "booleanValues": [
+                      "false",
+                      "true"
+                    ],
+                    "displayAs": "number",
+                    "displayName": "Train Rows",
+                    "fieldName": "training_data_count",
+                    "highlightLinks": false,
+                    "imageHeight": "",
+                    "imageTitleTemplate": "{{ @ }}",
+                    "imageUrlTemplate": "{{ @ }}",
+                    "imageWidth": "",
+                    "linkOpenInNewTab": true,
+                    "linkTextTemplate": "{{ @ }}",
+                    "linkTitleTemplate": "{{ @ }}",
+                    "linkUrlTemplate": "{{ @ }}",
+                    "order": 100006,
+                    "preserveWhitespace": false,
+                    "title": "Train Rows",
+                    "type": "float",
+                    "useMonospaceFont": false,
+                    "visible": true,
+                    "numberFormat": "0"
+                  },
+                  {
+                    "alignContent": "left",
+                    "allowHTML": false,
+                    "allowSearch": false,
+                    "booleanValues": [
+                      "false",
+                      "true"
+                    ],
+                    "displayAs": "string",
+                    "displayName": "UTC End",
+                    "fieldName": "run_end_time_utc",
+                    "highlightLinks": false,
+                    "imageHeight": "",
+                    "imageTitleTemplate": "{{ @ }}",
+                    "imageUrlTemplate": "{{ @ }}",
+                    "imageWidth": "",
+                    "linkOpenInNewTab": true,
+                    "linkTextTemplate": "{{ @ }}",
+                    "linkTitleTemplate": "{{ @ }}",
+                    "linkUrlTemplate": "{{ @ }}",
+                    "order": 100000,
+                    "preserveWhitespace": false,
+                    "title": "UTC End",
+                    "type": "string",
+                    "useMonospaceFont": false,
+                    "visible": true
+                  },
+                  {
+                    "alignContent": "left",
+                    "allowHTML": false,
+                    "allowSearch": false,
+                    "booleanValues": [
+                      "false",
+                      "true"
+                    ],
+                    "displayAs": "string",
+                    "displayName": "KST End",
+                    "fieldName": "run_end_time_kst",
+                    "highlightLinks": false,
+                    "imageHeight": "",
+                    "imageTitleTemplate": "{{ @ }}",
+                    "imageUrlTemplate": "{{ @ }}",
+                    "imageWidth": "",
+                    "linkOpenInNewTab": true,
+                    "linkTextTemplate": "{{ @ }}",
+                    "linkTitleTemplate": "{{ @ }}",
+                    "linkUrlTemplate": "{{ @ }}",
+                    "order": 100000,
+                    "preserveWhitespace": false,
+                    "title": "KST End",
+                    "type": "string",
+                    "useMonospaceFont": false,
+                    "visible": true
+                  }
+                ]
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Best Run (Top 1 by Primary Metric)"
+              },
+              "invisibleColumns": [],
+              "itemsPerPage": 20,
+              "paginationSize": "default",
+              "version": 1,
+              "widgetType": "table",
+              "withRowNumber": false
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 14,
+            "width": 6,
+            "height": 3
+          }
+        },
+        {
+          "widget": {
+            "name": "t_ml_runs",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_ml_runs_30d",
+                  "fields": [
+                    {
+                      "name": "run_name",
+                      "expression": "`run_name`"
+                    },
+                    {
+                      "name": "status",
+                      "expression": "`status`"
+                    },
+                    {
+                      "name": "primary_metric_name",
+                      "expression": "`primary_metric_name`"
+                    },
+                    {
+                      "name": "primary_metric_latest",
+                      "expression": "`primary_metric_latest`"
+                    },
+                    {
+                      "name": "test_r2_latest",
+                      "expression": "`test_r2_latest`"
+                    },
+                    {
+                      "name": "test_rmse_latest",
+                      "expression": "`test_rmse_latest`"
+                    },
+                    {
+                      "name": "training_data_count",
+                      "expression": "`training_data_count`"
+                    },
+                    {
+                      "name": "run_end_time_utc",
+                      "expression": "`run_end_time_utc`"
+                    },
+                    {
+                      "name": "run_end_time_kst",
+                      "expression": "`run_end_time_kst`"
+                    }
+                  ],
+                  "disaggregated": true
+                }
+              }
+            ],
+            "spec": {
+              "allowHTMLByDefault": false,
+              "condensed": true,
+              "encodings": {
+                "columns": [
+                  {
+                    "alignContent": "left",
+                    "allowHTML": false,
+                    "allowSearch": false,
+                    "booleanValues": [
+                      "false",
+                      "true"
+                    ],
+                    "displayAs": "string",
+                    "displayName": "Run",
+                    "fieldName": "run_name",
+                    "highlightLinks": false,
+                    "imageHeight": "",
+                    "imageTitleTemplate": "{{ @ }}",
+                    "imageUrlTemplate": "{{ @ }}",
+                    "imageWidth": "",
+                    "linkOpenInNewTab": true,
+                    "linkTextTemplate": "{{ @ }}",
+                    "linkTitleTemplate": "{{ @ }}",
+                    "linkUrlTemplate": "{{ @ }}",
+                    "order": 100000,
+                    "preserveWhitespace": false,
+                    "title": "Run",
+                    "type": "string",
+                    "useMonospaceFont": false,
+                    "visible": true
+                  },
+                  {
+                    "alignContent": "left",
+                    "allowHTML": false,
+                    "allowSearch": false,
+                    "booleanValues": [
+                      "false",
+                      "true"
+                    ],
+                    "displayAs": "string",
+                    "displayName": "Status",
+                    "fieldName": "status",
+                    "highlightLinks": false,
+                    "imageHeight": "",
+                    "imageTitleTemplate": "{{ @ }}",
+                    "imageUrlTemplate": "{{ @ }}",
+                    "imageWidth": "",
+                    "linkOpenInNewTab": true,
+                    "linkTextTemplate": "{{ @ }}",
+                    "linkTitleTemplate": "{{ @ }}",
+                    "linkUrlTemplate": "{{ @ }}",
+                    "order": 100000,
+                    "preserveWhitespace": false,
+                    "title": "Status",
+                    "type": "string",
+                    "useMonospaceFont": false,
+                    "visible": true
+                  },
+                  {
+                    "alignContent": "left",
+                    "allowHTML": false,
+                    "allowSearch": false,
+                    "booleanValues": [
+                      "false",
+                      "true"
+                    ],
+                    "displayAs": "string",
+                    "displayName": "Primary Metric",
+                    "fieldName": "primary_metric_name",
+                    "highlightLinks": false,
+                    "imageHeight": "",
+                    "imageTitleTemplate": "{{ @ }}",
+                    "imageUrlTemplate": "{{ @ }}",
+                    "imageWidth": "",
+                    "linkOpenInNewTab": true,
+                    "linkTextTemplate": "{{ @ }}",
+                    "linkTitleTemplate": "{{ @ }}",
+                    "linkUrlTemplate": "{{ @ }}",
+                    "order": 100000,
+                    "preserveWhitespace": false,
+                    "title": "Primary Metric",
+                    "type": "string",
+                    "useMonospaceFont": false,
+                    "visible": true
+                  },
+                  {
+                    "alignContent": "right",
+                    "allowHTML": false,
+                    "allowSearch": false,
+                    "booleanValues": [
+                      "false",
+                      "true"
+                    ],
+                    "displayAs": "number",
+                    "displayName": "Metric",
+                    "fieldName": "primary_metric_latest",
+                    "highlightLinks": false,
+                    "imageHeight": "",
+                    "imageTitleTemplate": "{{ @ }}",
+                    "imageUrlTemplate": "{{ @ }}",
+                    "imageWidth": "",
+                    "linkOpenInNewTab": true,
+                    "linkTextTemplate": "{{ @ }}",
+                    "linkTitleTemplate": "{{ @ }}",
+                    "linkUrlTemplate": "{{ @ }}",
+                    "order": 100003,
+                    "preserveWhitespace": false,
+                    "title": "Metric",
+                    "type": "float",
+                    "useMonospaceFont": false,
+                    "visible": true,
+                    "numberFormat": "0.0000"
+                  },
+                  {
+                    "alignContent": "right",
+                    "allowHTML": false,
+                    "allowSearch": false,
+                    "booleanValues": [
+                      "false",
+                      "true"
+                    ],
+                    "displayAs": "number",
+                    "displayName": "Test R2",
+                    "fieldName": "test_r2_latest",
+                    "highlightLinks": false,
+                    "imageHeight": "",
+                    "imageTitleTemplate": "{{ @ }}",
+                    "imageUrlTemplate": "{{ @ }}",
+                    "imageWidth": "",
+                    "linkOpenInNewTab": true,
+                    "linkTextTemplate": "{{ @ }}",
+                    "linkTitleTemplate": "{{ @ }}",
+                    "linkUrlTemplate": "{{ @ }}",
+                    "order": 100004,
+                    "preserveWhitespace": false,
+                    "title": "Test R2",
+                    "type": "float",
+                    "useMonospaceFont": false,
+                    "visible": true,
+                    "numberFormat": "0.0000"
+                  },
+                  {
+                    "alignContent": "right",
+                    "allowHTML": false,
+                    "allowSearch": false,
+                    "booleanValues": [
+                      "false",
+                      "true"
+                    ],
+                    "displayAs": "number",
+                    "displayName": "Test RMSE",
+                    "fieldName": "test_rmse_latest",
+                    "highlightLinks": false,
+                    "imageHeight": "",
+                    "imageTitleTemplate": "{{ @ }}",
+                    "imageUrlTemplate": "{{ @ }}",
+                    "imageWidth": "",
+                    "linkOpenInNewTab": true,
+                    "linkTextTemplate": "{{ @ }}",
+                    "linkTitleTemplate": "{{ @ }}",
+                    "linkUrlTemplate": "{{ @ }}",
+                    "order": 100005,
+                    "preserveWhitespace": false,
+                    "title": "Test RMSE",
+                    "type": "float",
+                    "useMonospaceFont": false,
+                    "visible": true,
+                    "numberFormat": "0.0000"
+                  },
+                  {
+                    "alignContent": "right",
+                    "allowHTML": false,
+                    "allowSearch": false,
+                    "booleanValues": [
+                      "false",
+                      "true"
+                    ],
+                    "displayAs": "number",
+                    "displayName": "Train Rows",
+                    "fieldName": "training_data_count",
+                    "highlightLinks": false,
+                    "imageHeight": "",
+                    "imageTitleTemplate": "{{ @ }}",
+                    "imageUrlTemplate": "{{ @ }}",
+                    "imageWidth": "",
+                    "linkOpenInNewTab": true,
+                    "linkTextTemplate": "{{ @ }}",
+                    "linkTitleTemplate": "{{ @ }}",
+                    "linkUrlTemplate": "{{ @ }}",
+                    "order": 100006,
+                    "preserveWhitespace": false,
+                    "title": "Train Rows",
+                    "type": "float",
+                    "useMonospaceFont": false,
+                    "visible": true,
+                    "numberFormat": "0"
+                  },
+                  {
+                    "alignContent": "left",
+                    "allowHTML": false,
+                    "allowSearch": false,
+                    "booleanValues": [
+                      "false",
+                      "true"
+                    ],
+                    "displayAs": "string",
+                    "displayName": "UTC End",
+                    "fieldName": "run_end_time_utc",
+                    "highlightLinks": false,
+                    "imageHeight": "",
+                    "imageTitleTemplate": "{{ @ }}",
+                    "imageUrlTemplate": "{{ @ }}",
+                    "imageWidth": "",
+                    "linkOpenInNewTab": true,
+                    "linkTextTemplate": "{{ @ }}",
+                    "linkTitleTemplate": "{{ @ }}",
+                    "linkUrlTemplate": "{{ @ }}",
+                    "order": 100000,
+                    "preserveWhitespace": false,
+                    "title": "UTC End",
+                    "type": "string",
+                    "useMonospaceFont": false,
+                    "visible": true
+                  },
+                  {
+                    "alignContent": "left",
+                    "allowHTML": false,
+                    "allowSearch": false,
+                    "booleanValues": [
+                      "false",
+                      "true"
+                    ],
+                    "displayAs": "string",
+                    "displayName": "KST End",
+                    "fieldName": "run_end_time_kst",
+                    "highlightLinks": false,
+                    "imageHeight": "",
+                    "imageTitleTemplate": "{{ @ }}",
+                    "imageUrlTemplate": "{{ @ }}",
+                    "imageWidth": "",
+                    "linkOpenInNewTab": true,
+                    "linkTextTemplate": "{{ @ }}",
+                    "linkTitleTemplate": "{{ @ }}",
+                    "linkUrlTemplate": "{{ @ }}",
+                    "order": 100000,
+                    "preserveWhitespace": false,
+                    "title": "KST End",
+                    "type": "string",
+                    "useMonospaceFont": false,
+                    "visible": true
+                  }
+                ]
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Recent ML Runs (Regression)"
+              },
+              "invisibleColumns": [],
+              "itemsPerPage": 20,
+              "paginationSize": "default",
+              "version": 1,
+              "widgetType": "table",
+              "withRowNumber": false
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 17,
+            "width": 6,
+            "height": 4
+          }
+        },
+        {
+          "widget": {
+            "name": "h_cq",
+            "multilineTextboxSpec": {
+              "lines": [
+                "## Cost & Quality Trends"
+              ]
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 21,
+            "width": 6,
+            "height": 1
+          }
+        },
+        {
+          "widget": {
+            "name": "b_cost",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_cost_daily_30d",
+                  "fields": [
+                    {
+                      "name": "usage_date_utc",
+                      "expression": "`usage_date_utc`"
+                    },
+                    {
+                      "name": "daily_cost_usd",
+                      "expression": "SUM(`daily_cost_usd`)"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "encodings": {
+                "label": {
+                  "show": false
+                },
+                "x": {
+                  "axis": {
+                    "title": "usage_date_utc"
+                  },
+                  "displayName": "usage_date_utc",
+                  "fieldName": "usage_date_utc",
+                  "scale": {
+                    "type": "temporal"
+                  }
+                },
+                "y": {
+                  "axis": {
+                    "title": "USD"
+                  },
+                  "displayName": "daily_cost_usd",
+                  "fieldName": "daily_cost_usd",
+                  "scale": {
+                    "type": "quantitative"
+                  }
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Daily Cost USD"
+              },
+              "mark": {
+                "colors": [
+                  "#9C2638",
+                  "#00A972",
+                  "#FFAB00",
+                  "#8BCAE7"
+                ]
+              },
+              "version": 3,
+              "widgetType": "bar"
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 22,
+            "width": 3,
+            "height": 4
+          }
+        },
+        {
+          "widget": {
+            "name": "b_ingest",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_cwe_ingest_trend_30d",
+                  "fields": [
+                    {
+                      "name": "ingest_date_utc",
+                      "expression": "`ingest_date_utc`"
+                    },
+                    {
+                      "name": "ingested_rows",
+                      "expression": "SUM(`ingested_rows`)"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "encodings": {
+                "label": {
+                  "show": false
+                },
+                "x": {
+                  "axis": {
+                    "title": "ingest_date_utc"
+                  },
+                  "displayName": "ingest_date_utc",
+                  "fieldName": "ingest_date_utc",
+                  "scale": {
+                    "type": "temporal"
+                  }
+                },
+                "y": {
+                  "axis": {
+                    "title": "Rows"
+                  },
+                  "displayName": "ingested_rows",
+                  "fieldName": "ingested_rows",
+                  "scale": {
+                    "type": "quantitative"
+                  }
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Daily CWE Ingest"
+              },
+              "mark": {
+                "colors": [
+                  "#1D6FA3",
+                  "#00A972",
+                  "#FFAB00",
+                  "#8BCAE7"
+                ]
+              },
+              "version": 3,
+              "widgetType": "bar"
+            }
+          },
+          "position": {
+            "x": 3,
+            "y": 22,
+            "width": 3,
+            "height": 4
+          }
+        },
+        {
+          "widget": {
+            "name": "b_depr",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_cwe_deprecated_ratio_30d",
+                  "fields": [
+                    {
+                      "name": "metric_date_utc",
+                      "expression": "`metric_date_utc`"
+                    },
+                    {
+                      "name": "deprecated_ratio_pct",
+                      "expression": "AVG(`deprecated_ratio_pct`)"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "encodings": {
+                "label": {
+                  "show": false
+                },
+                "x": {
+                  "axis": {
+                    "title": "metric_date_utc"
+                  },
+                  "displayName": "metric_date_utc",
+                  "fieldName": "metric_date_utc",
+                  "scale": {
+                    "type": "temporal"
+                  }
+                },
+                "y": {
+                  "axis": {
+                    "title": "%"
+                  },
+                  "displayName": "deprecated_ratio_pct",
+                  "fieldName": "deprecated_ratio_pct",
+                  "scale": {
+                    "type": "quantitative"
+                  }
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Deprecated Ratio %"
+              },
+              "mark": {
+                "colors": [
+                  "#E67E22",
+                  "#00A972",
+                  "#FFAB00",
+                  "#8BCAE7"
+                ]
+              },
+              "version": 3,
+              "widgetType": "bar"
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 26,
+            "width": 3,
+            "height": 4
+          }
+        },
+        {
+          "widget": {
+            "name": "b_empty",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_cwe_silver_quality_30d",
+                  "fields": [
+                    {
+                      "name": "metric_date_utc",
+                      "expression": "`metric_date_utc`"
+                    },
+                    {
+                      "name": "empty_search_text_ratio_pct",
+                      "expression": "AVG(`empty_search_text_ratio_pct`)"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "encodings": {
+                "label": {
+                  "show": false
+                },
+                "x": {
+                  "axis": {
+                    "title": "metric_date_utc"
+                  },
+                  "displayName": "metric_date_utc",
+                  "fieldName": "metric_date_utc",
+                  "scale": {
+                    "type": "temporal"
+                  }
+                },
+                "y": {
+                  "axis": {
+                    "title": "%"
+                  },
+                  "displayName": "empty_search_text_ratio_pct",
+                  "fieldName": "empty_search_text_ratio_pct",
+                  "scale": {
+                    "type": "quantitative"
+                  }
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Silver Empty SearchText %"
+              },
+              "mark": {
+                "colors": [
+                  "#8E44AD",
+                  "#00A972",
+                  "#FFAB00",
+                  "#8BCAE7"
+                ]
+              },
+              "version": 3,
+              "widgetType": "bar"
+            }
+          },
+          "position": {
+            "x": 3,
+            "y": 26,
+            "width": 3,
+            "height": 4
+          }
+        },
+        {
+          "widget": {
+            "name": "h_footer",
+            "multilineTextboxSpec": {
+              "lines": [
+                "_Data Window: 최근 30일 · Timezone: UTC + Asia/Seoul_"
+              ]
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 30,
+            "width": 6,
+            "height": 1
+          }
+        }
+      ],
+      "pageType": "PAGE_TYPE_CANVAS"
+    }
+  ],
+  "uiSettings": {
+    "theme": {
+      "widgetHeaderAlignment": "ALIGNMENT_UNSPECIFIED"
+    },
+    "applyModeEnabled": false
+  }
+}
